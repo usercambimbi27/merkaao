@@ -3070,13 +3070,21 @@ const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 // ── Verifica se é admin e mostra botão ──
-window.addEventListener('merkaao:loggedin', () => {
+function _verificarAdmin() {
   const user = window._firebaseUser;
   if (user && ADMIN_EMAILS.includes(user.email)) {
     const adminItem = document.getElementById('adminMenuItem');
     if (adminItem) adminItem.style.display = 'flex';
+    return true;
   }
-});
+  return false;
+}
+window.addEventListener('merkaao:loggedin', _verificarAdmin);
+// Fallback: verifica a cada segundo até 10s após login
+let _adminCheckCount = 0;
+const _adminInterval = setInterval(() => {
+  if (_verificarAdmin() || _adminCheckCount++ > 10) clearInterval(_adminInterval);
+}, 1000);
 
 // ── Preview do BI no registo ──
 window.previewBI = function(input) {
