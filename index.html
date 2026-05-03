@@ -804,6 +804,113 @@ footer strong{color:var(--areia);}
   .chat-window{width:calc(100vw - 2rem);right:1rem;}
   .ai-images-compare{grid-template-columns:1fr;}
 }
+
+/* ══════════════════════════════════════
+   PAINEL ADMIN — VERIFICAÇÃO BI
+══════════════════════════════════════ */
+.admin-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:5000;
+  display:none;align-items:flex-start;justify-content:center;
+  padding:1rem;overflow-y:auto;
+}
+.admin-overlay.open{display:flex;}
+.admin-box{
+  background:var(--cinza);border:1px solid rgba(200,169,110,.3);
+  border-radius:16px;width:100%;max-width:760px;
+  margin:auto;overflow:hidden;
+}
+.admin-header{
+  background:linear-gradient(135deg,#1a1a1a,#0a0a0a);
+  padding:1.2rem 1.5rem;display:flex;align-items:center;
+  justify-content:space-between;border-bottom:1px solid rgba(200,169,110,.2);
+}
+.admin-header h2{font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:800;}
+.admin-header h2 span{color:var(--areia);}
+.admin-close{background:none;border:none;color:var(--cinza3);font-size:1.4rem;cursor:pointer;line-height:1;}
+.admin-tabs{display:flex;border-bottom:1px solid #2a2a2a;background:#111;}
+.admin-tab{
+  flex:1;padding:.75rem;text-align:center;font-size:.78rem;font-weight:600;
+  color:var(--cinza3);cursor:pointer;border-bottom:2px solid transparent;transition:all .2s;
+}
+.admin-tab.active{color:var(--areia);border-bottom-color:var(--areia);background:var(--cinza);}
+.admin-content{padding:1.2rem 1.5rem;}
+.admin-section{display:none;}
+.admin-section.active{display:block;}
+
+/* Cards de verificação BI */
+.bi-queue{display:flex;flex-direction:column;gap:.8rem;max-height:480px;overflow-y:auto;}
+.bi-card{
+  background:var(--cinza2);border:1px solid #333;border-radius:10px;
+  padding:1rem;display:flex;gap:.9rem;align-items:flex-start;
+}
+.bi-avatar{
+  width:42px;height:42px;border-radius:50%;background:var(--vermelho);
+  display:flex;align-items:center;justify-content:center;
+  font-family:'Syne',sans-serif;font-weight:800;font-size:1rem;flex-shrink:0;
+}
+.bi-info{flex:1;min-width:0;}
+.bi-nome{font-weight:700;font-size:.88rem;margin-bottom:.15rem;}
+.bi-meta{font-size:.72rem;color:var(--cinza3);margin-bottom:.5rem;}
+.bi-img-wrap{
+  background:#111;border-radius:7px;overflow:hidden;
+  border:1px solid #333;margin-bottom:.6rem;max-height:120px;
+  display:flex;align-items:center;justify-content:center;
+}
+.bi-img-wrap img{width:100%;max-height:120px;object-fit:contain;}
+.bi-img-placeholder{
+  padding:1rem;text-align:center;color:var(--cinza3);font-size:.75rem;
+}
+.bi-actions{display:flex;gap:.5rem;flex-wrap:wrap;}
+.btn-aprovar{
+  background:var(--verde);border:none;color:white;
+  padding:.4rem .9rem;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer;
+  transition:opacity .2s;
+}
+.btn-aprovar:hover{opacity:.85;}
+.btn-rejeitar{
+  background:var(--vermelho);border:none;color:white;
+  padding:.4rem .9rem;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer;
+  transition:opacity .2s;
+}
+.btn-rejeitar:hover{opacity:.85;}
+.btn-ver-bi{
+  background:transparent;border:1px solid var(--areia);color:var(--areia);
+  padding:.4rem .9rem;border-radius:6px;font-size:.75rem;font-weight:600;cursor:pointer;
+}
+.bi-status{
+  font-size:.68rem;font-weight:700;padding:.18rem .5rem;border-radius:4px;
+  display:inline-block;margin-left:.4rem;
+}
+.bi-status.pendente{background:rgba(245,200,66,.15);color:var(--gold);}
+.bi-status.aprovado{background:rgba(34,197,94,.15);color:var(--verde);}
+.bi-status.rejeitado{background:rgba(232,32,12,.15);color:#ff6b6b;}
+
+/* Stats admin */
+.admin-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:.7rem;margin-bottom:1.2rem;}
+.admin-stat{background:var(--cinza2);border-radius:9px;padding:.9rem;text-align:center;}
+.admin-stat-num{font-family:'Syne',sans-serif;font-size:1.6rem;font-weight:800;color:var(--areia);}
+.admin-stat-label{font-size:.68rem;color:var(--cinza3);margin-top:.15rem;}
+
+/* Upload BI no registo */
+.bi-upload-section{
+  background:rgba(200,169,110,.06);border:1px dashed rgba(200,169,110,.3);
+  border-radius:10px;padding:1rem;margin-top:.5rem;
+}
+.bi-upload-title{font-size:.78rem;font-weight:700;color:var(--areia);margin-bottom:.5rem;display:flex;align-items:center;gap:.4rem;}
+.bi-upload-hint{font-size:.68rem;color:var(--cinza3);margin-bottom:.7rem;}
+.bi-upload-btn{
+  width:100%;background:var(--cinza2);border:1px solid #3a3a3a;color:var(--branco);
+  padding:.6rem;border-radius:8px;font-size:.8rem;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:.5rem;transition:border .2s;
+}
+.bi-upload-btn:hover{border-color:var(--areia);}
+.bi-preview{display:none;margin-top:.6rem;border-radius:7px;overflow:hidden;max-height:100px;}
+.bi-preview img{width:100%;max-height:100px;object-fit:contain;background:#111;}
+.bi-skip{font-size:.7rem;color:var(--cinza3);text-align:center;margin-top:.5rem;cursor:pointer;}
+.bi-skip span{color:var(--areia);}
+
+/* Badge pendente */
+.badge-pendente{display:inline-flex;align-items:center;gap:.2rem;background:rgba(245,200,66,.12);border:1px solid rgba(245,200,66,.3);color:var(--gold);font-size:.6rem;font-weight:600;padding:.12rem .35rem;border-radius:3px;}
 </style>
 </head>
 <body>
@@ -896,6 +1003,19 @@ footer strong{color:var(--areia);}
           <button class="pass-toggle" onclick="togglePass('regPass',this)">👁</button>
         </div>
       </div>
+      <!-- UPLOAD BI -->
+      <div class="bi-upload-section">
+        <div class="bi-upload-title">🪪 Verificação de Identidade <span style="color:var(--cinza3);font-weight:400;">(opcional)</span></div>
+        <div class="bi-upload-hint">Envia uma foto do teu BI para receber o selo ✓ Verificado e publicar produtos. Podes fazer mais tarde.</div>
+        <button type="button" class="bi-upload-btn" onclick="document.getElementById('biFileInput').click()">
+          📷 Fotografar / Carregar BI
+        </button>
+        <input type="file" id="biFileInput" accept="image/*" capture="environment" style="display:none" onchange="previewBI(this)">
+        <div class="bi-preview" id="biPreview"><img id="biPreviewImg" src="" alt="BI"></div>
+        <div class="bi-skip" onclick="document.getElementById('biPreview').style.display='none';document.getElementById('biFileInput').value='';">
+          <span>Saltar por agora →</span>
+        </div>
+      </div>
       <div class="auth-err" id="registerErr">Por favor preenche todos os campos.</div>
       <button class="auth-btn" onclick="doRegister()">Criar Conta Grátis</button>
     </div>
@@ -934,6 +1054,7 @@ footer strong{color:var(--areia);}
     <div class="user-avatar-nav" id="userAvatarNav" onclick="toggleDropdown()">
       <span class="avatar-initials">?</span>
       <div class="user-dropdown" id="userDropdown">
+        <div class="drop-item" id="adminMenuItem" onclick="abrirAdmin()" style="display:none;">🛡️ Painel Admin</div>
         <div class="drop-item" onclick="abrirPerfil()">👤 O Meu Perfil</div>
         <div class="drop-item" onclick="showToast('As tuas compras...')">🛒 As Minhas Compras</div>
         <div class="drop-item" onclick="togglePainel()">📦 Os Meus Anúncios</div>
@@ -2863,5 +2984,331 @@ function toggleCardShare(btn) {
 
 function scrollTop() { window.scrollTo({top:0,behavior:'smooth'}); }
 </script>
+<!-- ══════════════════════════════════════
+     PAINEL ADMIN — VERIFICAÇÃO BI
+══════════════════════════════════════ -->
+<div class="admin-overlay" id="adminOverlay">
+  <div class="admin-box">
+    <div class="admin-header">
+      <h2>🛡️ Painel <span>Admin</span> — MerkaAO</h2>
+      <button class="admin-close" onclick="fecharAdmin()">✕</button>
+    </div>
+    <div class="admin-tabs">
+      <div class="admin-tab active" onclick="switchAdminTab('verificacoes')">🪪 Verificações BI</div>
+      <div class="admin-tab" onclick="switchAdminTab('produtos')">📦 Produtos</div>
+      <div class="admin-tab" onclick="switchAdminTab('stats')">📊 Stats</div>
+    </div>
+    <div class="admin-content">
+
+      <!-- TAB: VERIFICAÇÕES BI -->
+      <div class="admin-section active" id="adminTab-verificacoes">
+        <div class="admin-stats" id="adminBiStats">
+          <div class="admin-stat"><div class="admin-stat-num" id="statPendentes">0</div><div class="admin-stat-label">Pendentes</div></div>
+          <div class="admin-stat"><div class="admin-stat-num" id="statAprovados">0</div><div class="admin-stat-label">Aprovados</div></div>
+          <div class="admin-stat"><div class="admin-stat-num" id="statRejeitados">0</div><div class="admin-stat-label">Rejeitados</div></div>
+        </div>
+        <div style="display:flex;gap:.5rem;margin-bottom:.8rem;">
+          <button onclick="filtrarBI('pendente')" style="flex:1;background:rgba(245,200,66,.12);border:1px solid rgba(245,200,66,.3);color:var(--gold);padding:.4rem;border-radius:6px;font-size:.75rem;cursor:pointer;">⏳ Pendentes</button>
+          <button onclick="filtrarBI('todos')" style="flex:1;background:var(--cinza2);border:1px solid #333;color:var(--branco);padding:.4rem;border-radius:6px;font-size:.75rem;cursor:pointer;">Todos</button>
+        </div>
+        <div class="bi-queue" id="biQueue">
+          <div style="text-align:center;padding:2rem;color:var(--cinza3);font-size:.8rem;">A carregar pedidos...</div>
+        </div>
+      </div>
+
+      <!-- TAB: PRODUTOS -->
+      <div class="admin-section" id="adminTab-produtos">
+        <div style="font-size:.8rem;color:var(--cinza3);margin-bottom:1rem;">Produtos publicados no MerkaAO (Firestore)</div>
+        <div id="adminProdList" style="display:flex;flex-direction:column;gap:.6rem;max-height:480px;overflow-y:auto;">
+          <div style="text-align:center;padding:2rem;color:var(--cinza3);font-size:.8rem;">A carregar produtos...</div>
+        </div>
+      </div>
+
+      <!-- TAB: STATS -->
+      <div class="admin-section" id="adminTab-stats">
+        <div class="admin-stats">
+          <div class="admin-stat"><div class="admin-stat-num" id="statTotalUsers">—</div><div class="admin-stat-label">Utilizadores</div></div>
+          <div class="admin-stat"><div class="admin-stat-num" id="statTotalProds">—</div><div class="admin-stat-label">Produtos</div></div>
+          <div class="admin-stat"><div class="admin-stat-num" id="statVerificados">—</div><div class="admin-stat-label">Verificados</div></div>
+        </div>
+        <div style="background:var(--cinza2);border-radius:9px;padding:1rem;font-size:.8rem;color:var(--cinza3);">
+          <div style="font-weight:700;color:var(--areia);margin-bottom:.5rem;">ℹ️ Sobre o MerkaAO Admin</div>
+          <p>Este painel permite-te gerir verificações de BI, aprovar ou rejeitar vendedores, e monitorizar a actividade da plataforma.</p>
+          <p style="margin-top:.5rem;">Admin actual: <strong id="adminEmailDisplay" style="color:var(--areia);">—</strong></p>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 </body>
+<!-- ══════════════════════════════════════
+     JS ADMIN — VERIFICAÇÃO BI
+══════════════════════════════════════ -->
+<script type="module">
+import { initializeApp, getApps } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
+import {
+  getFirestore, collection, addDoc, getDocs, query, orderBy,
+  serverTimestamp, where, updateDoc, doc, getDoc
+} from "https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js";
+import { getStorage, ref, uploadString, getDownloadURL } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-storage.js";
+
+// Admin emails autorizados — adiciona o teu aqui
+const ADMIN_EMAILS = ['olivioamario@gmail.com', 'usercambimbi27@gmail.com'];
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCPjdhyzUoZgf-_9XAZN2Mo-17poSPhlQA",
+  authDomain: "merkaao.firebaseapp.com",
+  projectId: "merkaao",
+  storageBucket: "merkaao.firebasestorage.app",
+  messagingSenderId: "133224622731",
+  appId: "1:133224622731:web:c540a1dfb216fd4d5d428e"
+};
+
+const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// ── Verifica se é admin e mostra botão ──
+window.addEventListener('merkaao:loggedin', () => {
+  const user = window._firebaseUser;
+  if (user && ADMIN_EMAILS.includes(user.email)) {
+    const adminItem = document.getElementById('adminMenuItem');
+    if (adminItem) adminItem.style.display = 'flex';
+  }
+});
+
+// ── Preview do BI no registo ──
+window.previewBI = function(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    document.getElementById('biPreviewImg').src = e.target.result;
+    document.getElementById('biPreview').style.display = 'block';
+    window._biImageData = e.target.result; // guarda para envio
+  };
+  reader.readAsDataURL(file);
+};
+
+// ── Envia pedido de verificação BI após registo ──
+window.enviarPedidoBI = async function(uid, nome, email) {
+  const biData = window._biImageData;
+  if (!biData) return; // sem imagem, saltar
+  try {
+    await addDoc(collection(db, 'verificacoes_bi'), {
+      uid, nome, email,
+      biImagem: biData, // base64 — em prod usar Storage
+      status: 'pendente',
+      criadoEm: serverTimestamp()
+    });
+    showToast('📋 Pedido de verificação BI enviado! Aguarda aprovação.');
+    window._biImageData = null;
+  } catch(e) {
+    console.error('Erro ao enviar BI:', e);
+  }
+};
+
+// ── Abre painel admin ──
+window.abrirAdmin = function() {
+  const user = window._firebaseUser;
+  if (!user || !ADMIN_EMAILS.includes(user.email)) {
+    showToast('⛔ Acesso negado.');
+    return;
+  }
+  document.getElementById('adminOverlay').classList.add('open');
+  document.getElementById('adminEmailDisplay').textContent = user.email;
+  carregarVerificacoesBi('pendente');
+  carregarProdutosAdmin();
+};
+
+window.fecharAdmin = function() {
+  document.getElementById('adminOverlay').classList.remove('open');
+};
+
+window.switchAdminTab = function(tab) {
+  document.querySelectorAll('.admin-tab').forEach((t,i) => {
+    t.classList.toggle('active', ['verificacoes','produtos','stats'][i] === tab);
+  });
+  document.querySelectorAll('.admin-section').forEach(s => s.classList.remove('active'));
+  const sec = document.getElementById('adminTab-' + tab);
+  if (sec) sec.classList.add('active');
+  if (tab === 'verificacoes') carregarVerificacoesBi('pendente');
+  if (tab === 'produtos') carregarProdutosAdmin();
+  if (tab === 'stats') carregarStatsAdmin();
+};
+
+// ── Carrega fila de verificações BI ──
+let _filtroBI = 'pendente';
+window.filtrarBI = function(filtro) {
+  _filtroBI = filtro;
+  carregarVerificacoesBi(filtro);
+};
+
+async function carregarVerificacoesBi(filtro = 'pendente') {
+  const queue = document.getElementById('biQueue');
+  queue.innerHTML = '<div style="text-align:center;padding:1.5rem;color:var(--cinza3);font-size:.8rem;">A carregar...</div>';
+  try {
+    let q;
+    if (filtro === 'todos') {
+      q = query(collection(db, 'verificacoes_bi'), orderBy('criadoEm', 'desc'));
+    } else {
+      q = query(collection(db, 'verificacoes_bi'), where('status','==',filtro), orderBy('criadoEm','desc'));
+    }
+    const snap = await getDocs(q);
+    const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // Actualiza stats
+    const todosSnap = await getDocs(collection(db, 'verificacoes_bi'));
+    const todos = todosSnap.docs.map(d => d.data());
+    document.getElementById('statPendentes').textContent = todos.filter(d=>d.status==='pendente').length;
+    document.getElementById('statAprovados').textContent = todos.filter(d=>d.status==='aprovado').length;
+    document.getElementById('statRejeitados').textContent = todos.filter(d=>d.status==='rejeitado').length;
+
+    if (docs.length === 0) {
+      queue.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--cinza3);font-size:.8rem;">✅ Nenhum pedido ' + (filtro==='pendente'?'pendente':'encontrado') + '.</div>';
+      return;
+    }
+
+    queue.innerHTML = docs.map(d => {
+      const inicial = (d.nome || 'U')[0].toUpperCase();
+      const data = d.criadoEm?.toDate ? d.criadoEm.toDate().toLocaleDateString('pt-AO') : '—';
+      const statusClass = d.status || 'pendente';
+      const statusLabel = {pendente:'⏳ Pendente', aprovado:'✓ Aprovado', rejeitado:'✗ Rejeitado'}[statusClass];
+      return `
+        <div class="bi-card" id="bicard-${d.id}">
+          <div class="bi-avatar">${inicial}</div>
+          <div class="bi-info">
+            <div class="bi-nome">${d.nome || 'Sem nome'} <span class="bi-status ${statusClass}">${statusLabel}</span></div>
+            <div class="bi-meta">${d.email || ''} · ${data}</div>
+            ${d.biImagem ? `
+              <div class="bi-img-wrap">
+                <img src="${d.biImagem}" alt="BI de ${d.nome}" loading="lazy">
+              </div>` : '<div class="bi-img-placeholder">📷 Sem imagem de BI</div>'
+            }
+            <div class="bi-actions">
+              ${d.status === 'pendente' ? `
+                <button class="btn-aprovar" onclick="aprovarBI('${d.id}','${d.uid||''}','${d.nome||''}')">✓ Aprovar</button>
+                <button class="btn-rejeitar" onclick="rejeitarBI('${d.id}','${d.uid||''}')">✗ Rejeitar</button>
+              ` : ''}
+              ${d.status === 'aprovado' ? `<button class="btn-rejeitar" onclick="rejeitarBI('${d.id}','${d.uid||''}')">✗ Revogar</button>` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch(e) {
+    queue.innerHTML = '<div style="text-align:center;padding:1.5rem;color:#ff6b6b;font-size:.8rem;">⚠️ Erro ao carregar. Verifica as regras do Firestore.</div>';
+    console.error(e);
+  }
+}
+
+// ── Aprovar verificação BI ──
+window.aprovarBI = async function(docId, uid, nome) {
+  try {
+    await updateDoc(doc(db, 'verificacoes_bi', docId), { status: 'aprovado' });
+    // Marca utilizador como verificado no Firestore
+    if (uid) {
+      const userDocs = await getDocs(query(collection(db, 'utilizadores'), where('uid','==',uid)));
+      userDocs.forEach(async ud => {
+        await updateDoc(doc(db, 'utilizadores', ud.id), { verificado: true });
+      });
+      // Envia notificação ao utilizador
+      await addDoc(collection(db, 'notificacoes'), {
+        uid, tipo:'verificacao', emoji:'✅',
+        texto:`A tua identidade foi verificada com sucesso! Já podes publicar produtos como ${nome}.`,
+        lida: false, criadoEm: serverTimestamp()
+      });
+    }
+    showToast('✅ ' + nome + ' aprovado com sucesso!');
+    carregarVerificacoesBi(_filtroBI);
+  } catch(e) {
+    showToast('⚠️ Erro ao aprovar.'); console.error(e);
+  }
+};
+
+// ── Rejeitar verificação BI ──
+window.rejeitarBI = async function(docId, uid) {
+  try {
+    await updateDoc(doc(db, 'verificacoes_bi', docId), { status: 'rejeitado' });
+    if (uid) {
+      await addDoc(collection(db, 'notificacoes'), {
+        uid, tipo:'verificacao', emoji:'❌',
+        texto:'O teu pedido de verificação foi rejeitado. Envia um BI legível e em bom estado.',
+        lida: false, criadoEm: serverTimestamp()
+      });
+    }
+    showToast('❌ Pedido rejeitado.');
+    carregarVerificacoesBi(_filtroBI);
+  } catch(e) {
+    showToast('⚠️ Erro ao rejeitar.'); console.error(e);
+  }
+};
+
+// ── Carrega produtos no admin ──
+async function carregarProdutosAdmin() {
+  const list = document.getElementById('adminProdList');
+  list.innerHTML = '<div style="text-align:center;padding:1.5rem;color:var(--cinza3);font-size:.8rem;">A carregar...</div>';
+  try {
+    const snap = await getDocs(query(collection(db, 'produtos'), orderBy('criadoEm','desc')));
+    const prods = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    if (prods.length === 0) {
+      list.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--cinza3);font-size:.8rem;">Nenhum produto publicado ainda.</div>';
+      return;
+    }
+    list.innerHTML = prods.map(p => `
+      <div style="background:var(--cinza2);border-radius:8px;padding:.75rem;display:flex;gap:.7rem;align-items:center;">
+        ${p.img ? `<img src="${p.img}" style="width:48px;height:48px;object-fit:cover;border-radius:6px;flex-shrink:0;" alt="">` : `<div style="width:48px;height:48px;background:#333;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;">${p.emoji||'📦'}</div>`}
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.nome||'Sem nome'}</div>
+          <div style="font-size:.7rem;color:var(--cinza3);">${p.seller||''} · ${p.cidade||''}</div>
+          <div style="font-size:.75rem;color:var(--areia);font-weight:700;">${p.preco||'0'} Kz</div>
+        </div>
+        <button onclick="eliminarProdutoAdmin('${p.id}')" style="background:rgba(232,32,12,.15);border:1px solid rgba(232,32,12,.3);color:#ff6b6b;padding:.3rem .6rem;border-radius:5px;font-size:.7rem;cursor:pointer;flex-shrink:0;">🗑</button>
+      </div>
+    `).join('');
+  } catch(e) {
+    list.innerHTML = '<div style="text-align:center;padding:1.5rem;color:#ff6b6b;font-size:.8rem;">⚠️ Erro ao carregar produtos.</div>';
+    console.error(e);
+  }
+}
+
+// ── Eliminar produto (admin) ──
+window.eliminarProdutoAdmin = async function(prodId) {
+  if (!confirm('Eliminar este produto?')) return;
+  try {
+    const { deleteDoc } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js");
+    await deleteDoc(doc(db, 'produtos', prodId));
+    showToast('🗑️ Produto eliminado.');
+    carregarProdutosAdmin();
+  } catch(e) {
+    showToast('⚠️ Erro ao eliminar.'); console.error(e);
+  }
+};
+
+// ── Stats admin ──
+async function carregarStatsAdmin() {
+  try {
+    const prods = await getDocs(collection(db, 'produtos'));
+    const bis = await getDocs(collection(db, 'verificacoes_bi'));
+    document.getElementById('statTotalProds').textContent = prods.size;
+    document.getElementById('statVerificados').textContent = bis.docs.filter(d=>d.data().status==='aprovado').length;
+    document.getElementById('statTotalUsers').textContent = bis.size;
+  } catch(e) { console.error(e); }
+}
+
+// ── Hook no doRegister para enviar BI ──
+const _origDoRegister = window.doRegister;
+window.doRegister = async function() {
+  // Chama o registo original primeiro
+  if (_origDoRegister) {
+    await _origDoRegister.call(this);
+  }
+  // Depois tenta enviar o BI se existir
+  const user = window._firebaseUser;
+  if (user && window._biImageData) {
+    await window.enviarPedidoBI(user.uid, user.displayName || '', user.email || '');
+  }
+};
+</script>
 </html>
