@@ -1152,10 +1152,10 @@ footer strong{color:var(--areia);}
 
     <!-- STATS -->
     <div class="stats-bar">
-      <div class="stat"><div class="stat-num">12.4K</div><div class="stat-label">Produtos activos</div></div>
-      <div class="stat"><div class="stat-num">3.2K</div><div class="stat-label">Vendedores verificados</div></div>
-      <div class="stat"><div class="stat-num" id="leilaoStat">18</div><div class="stat-label">Leilões ao vivo agora</div></div>
-      <div class="stat"><div class="stat-num">98%</div><div class="stat-label">Transacções concluídas</div></div>
+      <div class="stat"><div class="stat-num" id="statProdutosAtivos">0</div><div class="stat-label">Produtos activos</div></div>
+      <div class="stat"><div class="stat-num" id="statVendedoresVerif">0</div><div class="stat-label">Vendedores verificados</div></div>
+      <div class="stat"><div class="stat-num" id="leilaoStat">0</div><div class="stat-label">Leilões ao vivo agora</div></div>
+      <div class="stat"><div class="stat-num" id="statTransacoes">—</div><div class="stat-label">Transacções concluídas</div></div>
     </div>
 
     <!-- LEILÕES -->
@@ -1810,26 +1810,15 @@ document.addEventListener('click', () => {
 // DADOS
 // ===========================================
 const PRODUTOS = [
-  {id:1,nome:'iPhone 15 Pro 256GB',preco:'185.000',seller:'TechStore AO',stars:'★★★★★',rating:4.9,vendas:234,cidade:'Luanda',img:'https://images.unsplash.com/photo-1695048133142-1a20484d2569?w=400&q=80',desc:'iPhone 15 Pro em excelente estado. Caixa original, carregador e auriculares incluídos. Garantia de 6 meses.',badge:'verificado',promovido:true,emoji:'📱',cat:'electronica'},
-  {id:2,nome:'MacBook Air M2 8GB/256GB',preco:'420.000',seller:'TechStore AO',stars:'★★★★★',rating:4.9,vendas:234,cidade:'Luanda',img:'https://images.unsplash.com/photo-1611186871348-b1ce696e52c9?w=400&q=80',desc:'MacBook Air M2 chip, 8GB RAM, 256GB SSD. Bateria em óptimo estado. Inclui carregador original.',badge:'verificado',promovido:true,emoji:'💻',cat:'electronica'},
-  {id:3,nome:'Nike Air Max 90 Originais',preco:'42.000',seller:'Sneaker Luanda',stars:'★★★★☆',rating:4.7,vendas:89,cidade:'Luanda',img:'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400&q=80',desc:'Nike Air Max 90 originais importados dos EUA. Tamanho 42. Caixa original incluída.',badge:'top',promovido:false,emoji:'👟',cat:'moda'},
-  {id:4,nome:'Mala Michael Kors Original',preco:'65.000',seller:'Moda Premium AO',stars:'★★★★☆',rating:4.6,vendas:45,cidade:'Luanda',img:'https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=400&q=80',desc:'Mala Michael Kors autêntica. Cor camel. Certificado de autenticidade incluído.',badge:'top',promovido:false,emoji:'👜',cat:'moda'},
-  {id:5,nome:'Toyota Hilux 2020 4x4',preco:'8.500.000',seller:'Auto Luanda',stars:'★★★★★',rating:4.8,vendas:12,cidade:'Luanda',img:'https://images.unsplash.com/photo-1559416523-140ddc3d238c?w=400&q=80',desc:'Toyota Hilux 2020, diesel, 4x4, 80.000km. Manutenção em dia. Documentos em ordem.',badge:'verificado',promovido:true,emoji:'🚗',cat:'veiculos'},
-  {id:6,nome:'Rolex Submariner 2022',preco:'1.200.000',seller:'Luxury AO',stars:'★★★★★',rating:4.9,vendas:8,cidade:'Luanda',img:'https://images.unsplash.com/photo-1523170335258-f5ed11844a49?w=400&q=80',desc:'Rolex Submariner Date, aço inoxidável, bisel preto. Certificado de autenticidade e caixa originais.',badge:'verificado',promovido:false,emoji:'⌚',cat:'coleccionaveis'},
-  {id:7,nome:'PlayStation 5 + 2 Comandos',preco:'165.000',seller:'TechStore AO',stars:'★★★★★',rating:4.9,vendas:234,cidade:'Luanda',img:'https://images.unsplash.com/photo-1607853202273-797f1c22a38e?w=400&q=80',desc:'PS5 edição padrão com leitor de discos. 2 comandos DualSense incluídos. Garantia de 1 ano.',badge:'verificado',promovido:false,emoji:'🎮',cat:'electronica'},
-  {id:8,nome:'Sofá 3 Lugares Premium',preco:'120.000',seller:'Casa & Lar AO',stars:'★★★★☆',rating:4.5,vendas:32,cidade:'Huambo',img:'https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=400&q=80',desc:'Sofá premium 3 lugares. Tecido cinzento antracite. Entrega disponível em Huambo.',badge:'verificado',promovido:false,emoji:'🛋️',cat:'casa'},
+  // Produtos carregados do Firestore dinamicamente
 ];
 
 const LEILOES = [
-  {id:'l1',nome:'iPhone 15 Pro 256GB',img:'https://images.unsplash.com/photo-1695048133142-1a20484d2569?w=400&q=80',emoji:'📱',seller:'TechStore AO',stars:'★★★★★',badge:'verificado',promovido:true,lance:'185.000',lances:12,timer:2820,historico:['Sandro M. — 185.000 Kz','Paulo K. — 180.000 Kz','Ana S. — 175.000 Kz']},
-  {id:'l2',nome:'Nike Air Max 90 Originais',img:'https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=400&q=80',emoji:'👟',seller:'Sneaker Luanda',stars:'★★★★☆',badge:'top',promovido:false,lance:'42.000',lances:7,timer:8100,historico:['Maria L. — 42.000 Kz','João F. — 38.000 Kz']},
-  {id:'l3',nome:'Máscara Tchokwe Original',img:'https://images.unsplash.com/photo-1578662996442-48f60103fc96?w=400&q=80',emoji:'🏺',seller:'Artesanato AO',stars:'★★★★★',badge:'verificado',promovido:false,lance:'28.000',lances:4,timer:19800,historico:['Carlos M. — 28.000 Kz','Rita N. — 25.000 Kz']},
+  // Leilões carregados do Firestore dinamicamente
 ];
 
 const SELLERS = [
-  {nome:'TechStore AO',avatar:'T',cor:'var(--vermelho)',stars:'★★★★★ 4.9',vendas:'234 vendas · Luanda',badge:'verificado',top:true},
-  {nome:'Sneaker Luanda',avatar:'S',cor:'#4A90D9',stars:'★★★★☆ 4.7',vendas:'89 vendas · Luanda',badge:'verificado',top:false},
-  {nome:'Artesanato AO',avatar:'A',cor:'#2E7D32',stars:'★★★★★ 4.8',vendas:'156 vendas · Huambo',badge:'verificado',top:true},
+  // Vendedores carregados do Firestore dinamicamente
 ];
 
 // ===========================================
@@ -3293,6 +3282,20 @@ window.eliminarProdutoAdmin = async function(prodId) {
     showToast('⚠️ Erro ao eliminar.'); console.error(e);
   }
 };
+
+// ── Carrega stats reais do Firestore ──
+async function carregarStatsHome() {
+  try {
+    const prodsSnap = await getDocs(collection(db, 'produtos'));
+    const bisSnap = await getDocs(query(collection(db, 'verificacoes_bi'), where('status','==','aprovado')));
+    const el1 = document.getElementById('statProdutosAtivos');
+    const el2 = document.getElementById('statVendedoresVerif');
+    if (el1) el1.textContent = prodsSnap.size;
+    if (el2) el2.textContent = bisSnap.size;
+  } catch(e) { console.log('Stats offline.'); }
+}
+window.addEventListener('merkaao:loggedin', carregarStatsHome);
+setTimeout(carregarStatsHome, 3000);
 
 // ── Stats admin ──
 async function carregarStatsAdmin() {
