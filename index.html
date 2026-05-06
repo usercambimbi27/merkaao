@@ -82,9 +82,21 @@
   // ── Expõe funções para o código global ──
   window._fb = {
     // AUTH — Registo com email/senha
-    async registar(nome, email, senha) {
+    async registar(nome, email, senha, tel, provincia) {
       const cred = await createUserWithEmailAndPassword(auth, email, senha);
       await updateProfile(cred.user, { displayName: nome });
+      // Guarda dados do utilizador no Firestore
+      const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js");
+      await setDoc(doc(db, 'usuarios', cred.user.uid), {
+        nome,
+        email,
+        tel: tel || '',
+        provincia: provincia || '',
+        tipo: 'comprador',
+        verificado: false,
+        criadoEm: new Date().toISOString(),
+        uid: cred.user.uid
+      });
       return cred.user;
     },
     // AUTH — Login com email/senha
@@ -1720,7 +1732,7 @@ async function doRegister() {
   try {
     await esperarFirebase();
     const nomeCompleto = nome + ' ' + apelido;
-    const user = await window._fb.registar(nomeCompleto, email, pass);
+    const user = await window._fb.registar(nomeCompleto, email, pass, tel, prov);
     currentUser = { nome: nomeCompleto, email: user.email, uid: user.uid, provincia: prov };
     enterApp();
   } catch(e) {
@@ -3151,6 +3163,787 @@ function scrollTop() { window.scrollTo({top:0,behavior:'smooth'}); }
     </div>
   </div>
 </div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     MELHORIAS MERKAAO — Sistema completo
+     1. Pedidos reais no Firestore
+     2. Perfil editável
+     3. Avaliações
+     4. Importador Facebook Marketplace
+     5. Convite automático ao vendedor FB
+     6. Filtros avançados
+     7. Comissão 5%
+     ═══════════════════════════════════════════════════════════ -->
+
+<style>
+/* ── Overlay base reutilizável ── */
+.mk-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9000;display:flex;align-items:flex-end;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s;}
+.mk-overlay.active{opacity:1;pointer-events:all;}
+.mk-sheet{background:#161616;width:100%;max-width:480px;border-radius:20px 20px 0 0;padding:1.4rem 1.2rem 2.2rem;max-height:88vh;overflow-y:auto;}
+.mk-sheet h2{font-size:1.05rem;font-weight:800;margin-bottom:1.1rem;color:#F4F2EE;}
+.mk-input{width:100%;background:#222;border:1px solid #333;border-radius:9px;padding:.7rem .9rem;color:#F4F2EE;font-size:.88rem;margin-bottom:.7rem;box-sizing:border-box;}
+.mk-input:focus{outline:none;border-color:#E8200C;}
+.mk-btn{width:100%;background:#E8200C;border:none;color:#fff;padding:.8rem;border-radius:9px;font-weight:700;font-size:.9rem;cursor:pointer;margin-bottom:.5rem;}
+.mk-btn.secondary{background:#2A2A2A;color:#F4F2EE;}
+.mk-btn.fb{background:#1877F2;}
+.mk-label{font-size:.76rem;color:#888;margin-bottom:.3rem;display:block;}
+.mk-stars-row{display:flex;gap:.3rem;margin-bottom:.8rem;}
+.mk-star{font-size:1.6rem;cursor:pointer;color:#555;transition:color .15s;}
+.mk-star.sel{color:#E8200C;}
+.mk-badge-fb{display:inline-flex;align-items:center;gap:.3rem;background:#1877F2;color:#fff;font-size:.7rem;font-weight:700;padding:.2rem .5rem;border-radius:4px;margin-left:.4rem;}
+.mk-badge-fb svg{width:10px;height:10px;}
+.mk-pedido-card{background:#1e1e1e;border-radius:10px;padding:.8rem;margin-bottom:.6rem;border-left:3px solid #E8200C;}
+.mk-pedido-status{font-size:.7rem;font-weight:700;padding:.15rem .4rem;border-radius:4px;background:#333;}
+.mk-pedido-status.pendente{color:#f5a623;}
+.mk-pedido-status.confirmado{color:#4CAF50;}
+.mk-pedido-status.cancelado{color:#E8200C;}
+.mk-filter-row{display:flex;gap:.5rem;overflow-x:auto;padding-bottom:.3rem;margin-bottom:.8rem;scrollbar-width:none;}
+.mk-filter-row::-webkit-scrollbar{display:none;}
+.mk-filter-chip{flex-shrink:0;padding:.35rem .8rem;border-radius:20px;font-size:.75rem;font-weight:600;border:1px solid #333;background:#1a1a1a;color:#aaa;cursor:pointer;white-space:nowrap;}
+.mk-filter-chip.active{background:#E8200C;color:#fff;border-color:#E8200C;}
+.mk-avaliacao-card{background:#1e1e1e;border-radius:9px;padding:.7rem;margin-bottom:.5rem;}
+.mk-preco-range{display:flex;gap:.5rem;align-items:center;}
+.mk-preco-range input{flex:1;}
+.invite-card{background:linear-gradient(135deg,#1877F2,#0d5dbf);border-radius:12px;padding:1rem;margin-bottom:.8rem;color:#fff;}
+.invite-card h3{font-size:.9rem;font-weight:800;margin-bottom:.3rem;}
+.invite-card p{font-size:.75rem;opacity:.85;margin-bottom:.7rem;}
+</style>
+
+<!-- ── OVERLAY: Importador Facebook Marketplace ── -->
+<div class="mk-overlay" id="fbImportOverlay">
+  <div class="mk-sheet">
+    <h2>🔵 Importar do Facebook Marketplace</h2>
+    <p style="font-size:.8rem;color:#888;margin-bottom:1rem;">Cola o link de um produto do Facebook Marketplace e o MerkaAO importa automaticamente os dados.</p>
+    <label class="mk-label">Link do produto (facebook.com/marketplace/...)</label>
+    <input class="mk-input" id="fbLinkInput" type="url" placeholder="https://www.facebook.com/marketplace/item/...">
+    <label class="mk-label">Ou preenche manualmente:</label>
+    <input class="mk-input" id="fbNomeInput" placeholder="Nome do produto">
+    <input class="mk-input" id="fbPrecoInput" placeholder="Preço em Kz" type="number">
+    <input class="mk-input" id="fbDescInput" placeholder="Descrição">
+    <input class="mk-input" id="fbImgInput" placeholder="URL da imagem (opcional)">
+    <select class="mk-input" id="fbCatInput">
+      <option value="electronica">📱 Electrónica</option>
+      <option value="moda">👟 Moda</option>
+      <option value="casa">🏠 Casa</option>
+      <option value="veiculos">🚗 Veículos</option>
+      <option value="outros">📦 Outros</option>
+    </select>
+    <input class="mk-input" id="fbVendedorNomeInput" placeholder="Nome do vendedor (Facebook)">
+    <input class="mk-input" id="fbVendedorContactoInput" placeholder="WhatsApp ou Facebook do vendedor">
+    <button class="mk-btn fb" onclick="importarDeFacebook()">🔵 Importar Produto</button>
+    <button class="mk-btn secondary" onclick="fecharOverlay('fbImportOverlay')">Cancelar</button>
+  </div>
+</div>
+
+<!-- ── OVERLAY: Convite ao vendedor FB ── -->
+<div class="mk-overlay" id="fbConviteOverlay">
+  <div class="mk-sheet">
+    <h2>📨 Convidar Vendedor do Facebook</h2>
+    <div class="invite-card">
+      <h3>🎉 Tens um cliente interessado!</h3>
+      <p id="fbConviteDesc">Um comprador no MerkaAO está interessado no teu produto.</p>
+      <div style="font-size:.72rem;opacity:.7;">Via MerkaAO — O Mercado de Todos os Angolanos</div>
+    </div>
+    <p style="font-size:.8rem;color:#aaa;margin-bottom:.8rem;" id="fbConviteInstrucoes">Partilha esta mensagem com o vendedor do Facebook:</p>
+    <div id="fbConviteMsgBox" style="background:#1a1a1a;border-radius:9px;padding:.9rem;font-size:.8rem;color:#F4F2EE;line-height:1.5;margin-bottom:.8rem;border:1px solid #333;"></div>
+    <button class="mk-btn fb" onclick="partilharConviteFB()">🔵 Partilhar via Facebook</button>
+    <button class="mk-btn" style="background:#25D366;" onclick="partilharConviteWA()">💬 Partilhar via WhatsApp</button>
+    <button class="mk-btn secondary" onclick="fecharOverlay('fbConviteOverlay')">Fechar</button>
+  </div>
+</div>
+
+<!-- ── OVERLAY: Pedidos ── -->
+<div class="mk-overlay" id="pedidosOverlay">
+  <div class="mk-sheet">
+    <h2>📦 Os Meus Pedidos</h2>
+    <div id="pedidosList" style="min-height:100px;">
+      <div style="text-align:center;padding:2rem;color:#555;font-size:.85rem;">A carregar pedidos...</div>
+    </div>
+    <button class="mk-btn secondary" style="margin-top:.8rem;" onclick="fecharOverlay('pedidosOverlay')">Fechar</button>
+  </div>
+</div>
+
+<!-- ── OVERLAY: Avaliar Vendedor ── -->
+<div class="mk-overlay" id="avaliarOverlay">
+  <div class="mk-sheet">
+    <h2>⭐ Avaliar Vendedor</h2>
+    <p style="font-size:.8rem;color:#888;margin-bottom:1rem;" id="avaliarVendedorNome"></p>
+    <label class="mk-label">Classificação</label>
+    <div class="mk-stars-row" id="starsRow">
+      <span class="mk-star" onclick="selecionarEstrela(1)">★</span>
+      <span class="mk-star" onclick="selecionarEstrela(2)">★</span>
+      <span class="mk-star" onclick="selecionarEstrela(3)">★</span>
+      <span class="mk-star" onclick="selecionarEstrela(4)">★</span>
+      <span class="mk-star" onclick="selecionarEstrela(5)">★</span>
+    </div>
+    <label class="mk-label">Comentário (opcional)</label>
+    <textarea class="mk-input" id="avaliarComentario" rows="3" placeholder="Descreve a tua experiência..."></textarea>
+    <button class="mk-btn" onclick="submeterAvaliacao()">Submeter Avaliação</button>
+    <button class="mk-btn secondary" onclick="fecharOverlay('avaliarOverlay')">Cancelar</button>
+  </div>
+</div>
+
+<!-- ── OVERLAY: Filtros Avançados ── -->
+<div class="mk-overlay" id="filtrosOverlay">
+  <div class="mk-sheet">
+    <h2>🔍 Filtros Avançados</h2>
+    <label class="mk-label">Categoria</label>
+    <div class="mk-filter-row" id="filtroCategoria">
+      <span class="mk-filter-chip active" onclick="toggleFiltro(this,'cat','todos')">Todos</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'cat','electronica')">📱 Electrónica</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'cat','moda')">👟 Moda</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'cat','casa')">🏠 Casa</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'cat','veiculos')">🚗 Veículos</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'cat','outros')">📦 Outros</span>
+    </div>
+    <label class="mk-label">Origem</label>
+    <div class="mk-filter-row" id="filtroOrigem">
+      <span class="mk-filter-chip active" onclick="toggleFiltro(this,'origem','todos')">Todos</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'origem','merkaao')">🛒 MerkaAO</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'origem','facebook')">🔵 Facebook</span>
+    </div>
+    <label class="mk-label">Província</label>
+    <div class="mk-filter-row" id="filtroProvincia">
+      <span class="mk-filter-chip active" onclick="toggleFiltro(this,'prov','todos')">Todas</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'prov','Luanda')">Luanda</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'prov','Huambo')">Huambo</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'prov','Benguela')">Benguela</span>
+      <span class="mk-filter-chip" onclick="toggleFiltro(this,'prov','Cabinda')">Cabinda</span>
+    </div>
+    <label class="mk-label">Preço (Kz)</label>
+    <div class="mk-preco-range">
+      <input class="mk-input" id="filtroPrecoMin" type="number" placeholder="Mín" style="margin:0;">
+      <span style="color:#666;">—</span>
+      <input class="mk-input" id="filtroPrecoMax" type="number" placeholder="Máx" style="margin:0;">
+    </div>
+    <label class="mk-label" style="margin-top:.5rem;">Ordenar por</label>
+    <select class="mk-input" id="filtroOrdem">
+      <option value="recente">Mais recente</option>
+      <option value="preco_asc">Preço: menor primeiro</option>
+      <option value="preco_desc">Preço: maior primeiro</option>
+      <option value="avaliacao">Melhor avaliação</option>
+    </select>
+    <button class="mk-btn" onclick="aplicarFiltros()">Aplicar Filtros</button>
+    <button class="mk-btn secondary" onclick="limparFiltros()">Limpar</button>
+  </div>
+</div>
+
+<!-- ── OVERLAY: Editar Perfil ── -->
+<div class="mk-overlay" id="editarPerfilOverlay">
+  <div class="mk-sheet">
+    <h2>✏️ Editar Perfil</h2>
+    <label class="mk-label">Nome completo</label>
+    <input class="mk-input" id="editNome" placeholder="O teu nome">
+    <label class="mk-label">Telefone</label>
+    <input class="mk-input" id="editTel" placeholder="+244 9XX XXX XXX" type="tel">
+    <label class="mk-label">Província</label>
+    <select class="mk-input" id="editProvincia">
+      <option>Luanda</option><option>Huambo</option><option>Benguela</option>
+      <option>Cabinda</option><option>Namibe</option><option>Malanje</option>
+      <option>Uíge</option><option>Zaire</option><option>Cunene</option>
+      <option>Cuando Cubango</option><option>Moxico</option><option>Lunda Norte</option>
+      <option>Lunda Sul</option><option>Bie</option><option>Huíla</option>
+      <option>Kwanza Norte</option><option>Kwanza Sul</option><option>Bengo</option>
+    </select>
+    <label class="mk-label">Tipo de conta</label>
+    <select class="mk-input" id="editTipo">
+      <option value="comprador">Comprador</option>
+      <option value="vendedor">Vendedor</option>
+    </select>
+    <button class="mk-btn" onclick="guardarPerfil()">💾 Guardar Alterações</button>
+    <button class="mk-btn secondary" onclick="fecharOverlay('editarPerfilOverlay')">Cancelar</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════
+// UTILITÁRIOS
+// ═══════════════════════════════════════════════════
+function fecharOverlay(id) {
+  document.getElementById(id)?.classList.remove('active');
+}
+
+// ═══════════════════════════════════════════════════
+// FIREBASE — FUNÇÕES ADICIONAIS
+// ═══════════════════════════════════════════════════
+async function _fbExtra() {
+  const { getFirestore, collection, addDoc, getDocs, query, where,
+          orderBy, doc, setDoc, updateDoc, serverTimestamp, limit, getDoc }
+    = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js");
+  const { getAuth } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js");
+  const { initializeApp, getApps } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js");
+  const app = getApps()[0];
+  const db  = getFirestore(app);
+  return { db, collection, addDoc, getDocs, query, where, orderBy,
+           doc, setDoc, updateDoc, serverTimestamp, limit, getDoc };
+}
+
+// ═══════════════════════════════════════════════════
+// SISTEMA DE PEDIDOS
+// ═══════════════════════════════════════════════════
+async function checkout(method) {
+  if (typeof cart === 'undefined' || cart.length === 0) {
+    showToast('⚠️ O carrinho está vazio!'); return;
+  }
+  if (!currentUser || currentUser.guest) {
+    showToast('⚠️ Precisas de fazer login para comprar.'); return;
+  }
+
+  const total = cart.reduce((s, item) => {
+    const preco = parseInt(String(item.preco).replace(/\D/g,'')) || 0;
+    return s + preco * (item.qty || 1);
+  }, 0);
+
+  const comissao = Math.round(total * 0.05);
+
+  try {
+    const { db, collection, addDoc, serverTimestamp } = await _fbExtra();
+
+    // Agrupa por vendedor
+    const porVendedor = {};
+    cart.forEach(item => {
+      const vid = item.sellerUid || item.seller || 'desconhecido';
+      if (!porVendedor[vid]) porVendedor[vid] = [];
+      porVendedor[vid].push(item);
+    });
+
+    const pedidoIds = [];
+    for (const [sellerKey, itens] of Object.entries(porVendedor)) {
+      const subtotal = itens.reduce((s, i) => s + (parseInt(String(i.preco).replace(/\D/g,''))||0) * (i.qty||1), 0);
+      const ref = await addDoc(collection(db, 'pedidos'), {
+        compradorUid: currentUser.uid,
+        compradorNome: currentUser.nome,
+        sellerUid: sellerKey,
+        sellerNome: itens[0].seller,
+        itens: itens.map(i => ({ id: i.id, nome: i.nome, preco: i.preco, qty: i.qty || 1, img: i.img || '' })),
+        total: subtotal,
+        comissaoMerkaAO: Math.round(subtotal * 0.05),
+        metodoPagamento: method,
+        status: 'pendente',
+        origem: itens[0].fbOrigem ? 'facebook' : 'merkaao',
+        criadoEm: serverTimestamp()
+      });
+      pedidoIds.push(ref.id);
+
+      // Notifica vendedor se for produto do Facebook
+      if (itens[0].fbOrigem && itens[0].fbVendedorContacto) {
+        abrirConviteFB(itens[0], currentUser.nome);
+      }
+
+      // Notificação ao vendedor MerkaAO
+      if (window._fb && sellerKey !== 'desconhecido' && !itens[0].fbOrigem) {
+        try {
+          await window._fb.criarNotificacao(
+            sellerKey, 'pedido',
+            `📦 Novo pedido de ${currentUser.nome}: ${itens.map(i=>i.nome).join(', ')}`, '📦'
+          );
+        } catch(e) {}
+      }
+    }
+
+    // Limpa carrinho
+    cart = [];
+    if (typeof updateCartBadge === 'function') updateCartBadge();
+    if (typeof renderCart === 'function') renderCart();
+    if (typeof closeCart === 'function') closeCart();
+
+    if (method === 'multicaixa') {
+      showToast(`💳 Pedido criado! Referência: MKA-${pedidoIds[0].slice(0,6).toUpperCase()} — Valor: ${total.toLocaleString('pt-PT')} Kz + ${comissao.toLocaleString('pt-PT')} Kz taxa`);
+    } else {
+      showToast(`✅ Pedido confirmado! O vendedor será notificado via WhatsApp.`);
+    }
+
+    // Notificação ao comprador
+    try {
+      await window._fb.criarNotificacao(
+        currentUser.uid, 'pedido',
+        `✅ Pedido realizado com sucesso! Total: ${total.toLocaleString('pt-PT')} Kz`, '✅'
+      );
+    } catch(e) {}
+
+  } catch(e) {
+    console.error('Erro no checkout:', e);
+    showToast('⚠️ Erro ao processar pedido. Tenta de novo.');
+  }
+}
+
+async function abrirPedidos() {
+  document.getElementById('pedidosOverlay').classList.add('active');
+  const list = document.getElementById('pedidosList');
+  list.innerHTML = '<div style="text-align:center;padding:2rem;color:#555;">A carregar...</div>';
+  if (!currentUser || currentUser.guest) {
+    list.innerHTML = '<div style="text-align:center;padding:2rem;color:#555;">Faz login para ver os teus pedidos.</div>';
+    return;
+  }
+  try {
+    const { db, collection, query, where, orderBy, getDocs, limit } = await _fbExtra();
+    const q = query(
+      collection(db, 'pedidos'),
+      where('compradorUid', '==', currentUser.uid),
+      orderBy('criadoEm', 'desc'),
+      limit(20)
+    );
+    const snap = await getDocs(q);
+    if (snap.empty) {
+      list.innerHTML = '<div style="text-align:center;padding:2rem;color:#555;font-size:.85rem;">Ainda não fizeste nenhum pedido.</div>';
+      return;
+    }
+    list.innerHTML = snap.docs.map(d => {
+      const p = d.data();
+      const data = p.criadoEm?.toDate ? p.criadoEm.toDate().toLocaleDateString('pt-PT') : '—';
+      const itensNomes = (p.itens||[]).map(i=>i.nome).join(', ');
+      const statusClass = p.status === 'confirmado' ? 'confirmado' : p.status === 'cancelado' ? 'cancelado' : 'pendente';
+      return `<div class="mk-pedido-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem;">
+          <span style="font-size:.78rem;font-weight:700;color:#F4F2EE;">#MKA-${d.id.slice(0,6).toUpperCase()}</span>
+          <span class="mk-pedido-status ${statusClass}">${p.status||'pendente'}</span>
+        </div>
+        <div style="font-size:.78rem;color:#aaa;margin-bottom:.3rem;">${itensNomes}</div>
+        <div style="display:flex;justify-content:space-between;">
+          <span style="font-size:.75rem;color:#888;">${data}</span>
+          <span style="font-size:.82rem;font-weight:700;color:#E8200C;">${(p.total||0).toLocaleString('pt-PT')} Kz</span>
+        </div>
+        ${p.origem==='facebook'?'<span style="font-size:.7rem;color:#1877F2;margin-top:.3rem;display:block;">🔵 Produto do Facebook</span>':''}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    list.innerHTML = '<div style="text-align:center;padding:2rem;color:#555;font-size:.8rem;">Erro ao carregar pedidos.</div>';
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// IMPORTADOR FACEBOOK MARKETPLACE
+// ═══════════════════════════════════════════════════
+function abrirImportadorFB() {
+  document.getElementById('fbImportOverlay').classList.add('active');
+}
+
+async function importarDeFacebook() {
+  const link = document.getElementById('fbLinkInput').value.trim();
+  const nome = document.getElementById('fbNomeInput').value.trim();
+  const preco = document.getElementById('fbPrecoInput').value.trim();
+  const desc = document.getElementById('fbDescInput').value.trim();
+  const img = document.getElementById('fbImgInput').value.trim();
+  const cat = document.getElementById('fbCatInput').value;
+  const vendedorNome = document.getElementById('fbVendedorNomeInput').value.trim();
+  const vendedorContacto = document.getElementById('fbVendedorContactoInput').value.trim();
+
+  if (!nome || !preco) {
+    showToast('⚠️ Preenche pelo menos o nome e preço do produto.'); return;
+  }
+
+  const emojiMap = { electronica:'📱', moda:'👟', casa:'🏠', veiculos:'🚗', outros:'📦' };
+
+  const dados = {
+    nome,
+    preco,
+    cat,
+    desc: desc || `Produto importado do Facebook Marketplace. ${link ? 'Ver original: ' + link : ''}`,
+    img: img || '',
+    emoji: emojiMap[cat] || '📦',
+    seller: vendedorNome || 'Vendedor Facebook',
+    sellerUid: '',
+    fbOrigem: true,
+    fbLink: link || '',
+    fbVendedorContacto: vendedorContacto || '',
+    cidade: currentUser?.provincia || 'Angola',
+    badge: 'top',
+    promovido: false
+  };
+
+  try {
+    if (window._fb) {
+      const docId = await window._fb.guardarProduto(dados);
+      PRODUTOS.unshift({ id: docId, stars: '★★★★☆', rating: 4.0, vendas: 0, ...dados });
+    } else {
+      PRODUTOS.unshift({ id: 'fb_' + Date.now(), stars: '★★★★☆', rating: 4.0, vendas: 0, ...dados });
+    }
+    if (typeof renderProducts === 'function') renderProducts('todos');
+    fecharOverlay('fbImportOverlay');
+    showToast('🔵 Produto do Facebook importado com sucesso!');
+
+    // Limpa campos
+    ['fbLinkInput','fbNomeInput','fbPrecoInput','fbDescInput','fbImgInput','fbVendedorNomeInput','fbVendedorContactoInput']
+      .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  } catch(e) {
+    showToast('⚠️ Erro ao importar produto. Tenta de novo.');
+    console.error(e);
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// SISTEMA DE CONVITE AO VENDEDOR DO FACEBOOK
+// ═══════════════════════════════════════════════════
+let _produtoConvite = null;
+
+function abrirConviteFB(produto, compradorNome) {
+  _produtoConvite = produto;
+  const msg = gerarMensagemConvite(produto, compradorNome || currentUser?.nome || 'Um comprador');
+  document.getElementById('fbConviteDesc').textContent =
+    `"${produto.nome}" — ${produto.preco} Kz`;
+  document.getElementById('fbConviteMsgBox').textContent = msg;
+  document.getElementById('fbConviteInstrucoes').textContent =
+    produto.fbVendedorContacto
+      ? `Contacto do vendedor: ${produto.fbVendedorContacto}`
+      : 'Partilha esta mensagem com o vendedor do Facebook:';
+  document.getElementById('fbConviteOverlay').classList.add('active');
+}
+
+function gerarMensagemConvite(produto, compradorNome) {
+  return `Olá! 👋
+
+Estou a entrar em contacto através do *MerkaAO* — O Mercado de Todos os Angolanos.
+
+Um comprador chamado *${compradorNome}* está interessado no teu produto:
+
+📦 *${produto.nome}*
+💰 *${produto.preco} Kz*
+${produto.fbLink ? `🔗 ${produto.fbLink}` : ''}
+
+Para dar continuidade à venda de forma segura, convido-te a registares-te gratuitamente no MerkaAO:
+
+👉 *merkaao.netlify.app*
+
+Na plataforma podes:
+✅ Receber pagamentos via Multicaixa Express
+✅ Comunicar directamente com compradores
+✅ Ter o teu perfil de vendedor verificado
+✅ Alcançar mais clientes em toda Angola
+
+O cliente está à tua espera! 🚀`;
+}
+
+function partilharConviteWA() {
+  const msg = document.getElementById('fbConviteMsgBox').textContent;
+  const contacto = _produtoConvite?.fbVendedorContacto?.replace(/\D/g,'') || '';
+  const url = contacto
+    ? `https://wa.me/${contacto}?text=${encodeURIComponent(msg)}`
+    : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+  window.open(url, '_blank');
+}
+
+function partilharConviteFB() {
+  const msg = document.getElementById('fbConviteMsgBox').textContent;
+  const fbLink = _produtoConvite?.fbLink || '';
+  if (fbLink) {
+    window.open(`https://www.facebook.com/messages/`, '_blank');
+    navigator.clipboard?.writeText(msg).then(() => showToast('✓ Mensagem copiada! Cola no Facebook Messenger.'));
+  } else {
+    navigator.clipboard?.writeText(msg).then(() => showToast('✓ Mensagem copiada! Cola no Facebook.'));
+    window.open('https://www.facebook.com/messages/', '_blank');
+  }
+}
+
+// Botão de interesse em produto FB — abre convite automaticamente
+function interesseEmProdutoFB(produtoId) {
+  const p = PRODUTOS.find(x => String(x.id) === String(produtoId));
+  if (!p) return;
+  if (!currentUser || currentUser.guest) {
+    showToast('⚠️ Faz login para contactar o vendedor.'); return;
+  }
+  abrirConviteFB(p, currentUser.nome);
+}
+
+// ═══════════════════════════════════════════════════
+// SISTEMA DE AVALIAÇÕES
+// ═══════════════════════════════════════════════════
+let _avaliacaoAtual = { vendedorUid: '', vendedorNome: '', produtoId: '', estrelas: 0 };
+
+function abrirAvaliacao(vendedorUid, vendedorNome, produtoId) {
+  _avaliacaoAtual = { vendedorUid, vendedorNome, produtoId, estrelas: 0 };
+  document.getElementById('avaliarVendedorNome').textContent = `Vendedor: ${vendedorNome}`;
+  document.getElementById('avaliarComentario').value = '';
+  document.querySelectorAll('.mk-star').forEach(s => s.classList.remove('sel'));
+  document.getElementById('avaliarOverlay').classList.add('active');
+}
+
+function selecionarEstrela(n) {
+  _avaliacaoAtual.estrelas = n;
+  document.querySelectorAll('.mk-star').forEach((s, i) => {
+    s.classList.toggle('sel', i < n);
+  });
+}
+
+async function submeterAvaliacao() {
+  if (_avaliacaoAtual.estrelas === 0) {
+    showToast('⚠️ Selecciona pelo menos 1 estrela.'); return;
+  }
+  const comentario = document.getElementById('avaliarComentario').value.trim();
+  try {
+    const { db, collection, addDoc, serverTimestamp } = await _fbExtra();
+    await addDoc(collection(db, 'avaliacoes'), {
+      vendedorUid: _avaliacaoAtual.vendedorUid,
+      vendedorNome: _avaliacaoAtual.vendedorNome,
+      produtoId: _avaliacaoAtual.produtoId,
+      compradorUid: currentUser.uid,
+      compradorNome: currentUser.nome,
+      estrelas: _avaliacaoAtual.estrelas,
+      comentario,
+      criadoEm: serverTimestamp()
+    });
+    fecharOverlay('avaliarOverlay');
+    showToast('⭐ Avaliação submetida! Obrigado.');
+
+    // Notifica vendedor
+    if (window._fb && _avaliacaoAtual.vendedorUid) {
+      try {
+        await window._fb.criarNotificacao(
+          _avaliacaoAtual.vendedorUid, 'avaliacao',
+          `⭐ ${currentUser.nome} avaliou-te com ${_avaliacaoAtual.estrelas} estrela${_avaliacaoAtual.estrelas>1?'s':''}!`, '⭐'
+        );
+      } catch(e) {}
+    }
+  } catch(e) {
+    showToast('⚠️ Erro ao submeter avaliação.');
+    console.error(e);
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// FILTROS AVANÇADOS
+// ═══════════════════════════════════════════════════
+const _filtros = { cat: 'todos', origem: 'todos', prov: 'todos' };
+
+function toggleFiltro(el, tipo, valor) {
+  // Remove active dos irmãos do mesmo grupo
+  el.parentElement.querySelectorAll('.mk-filter-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  _filtros[tipo] = valor;
+}
+
+function aplicarFiltros() {
+  const precoMin = parseInt(document.getElementById('filtroPrecoMin').value) || 0;
+  const precoMax = parseInt(document.getElementById('filtroPrecoMax').value) || Infinity;
+  const ordem = document.getElementById('filtroOrdem').value;
+
+  let lista = [...PRODUTOS];
+
+  if (_filtros.cat !== 'todos') lista = lista.filter(p => p.cat === _filtros.cat);
+  if (_filtros.origem === 'facebook') lista = lista.filter(p => p.fbOrigem);
+  if (_filtros.origem === 'merkaao') lista = lista.filter(p => !p.fbOrigem);
+  if (_filtros.prov !== 'todos') lista = lista.filter(p =>
+    (p.cidade || p.provincia || '').toLowerCase().includes(_filtros.prov.toLowerCase())
+  );
+
+  lista = lista.filter(p => {
+    const preco = parseInt(String(p.preco).replace(/\D/g,'')) || 0;
+    return preco >= precoMin && preco <= precoMax;
+  });
+
+  if (ordem === 'preco_asc') lista.sort((a,b) => (parseInt(String(a.preco).replace(/\D/g,''))||0) - (parseInt(String(b.preco).replace(/\D/g,''))||0));
+  if (ordem === 'preco_desc') lista.sort((a,b) => (parseInt(String(b.preco).replace(/\D/g,''))||0) - (parseInt(String(a.preco).replace(/\D/g,''))||0));
+  if (ordem === 'avaliacao') lista.sort((a,b) => (b.rating||0) - (a.rating||0));
+
+  const grid = document.getElementById('productsGrid');
+  if (grid) {
+    if (lista.length === 0) {
+      grid.innerHTML = '<div style="text-align:center;padding:2rem;color:#555;font-size:.85rem;grid-column:1/-1;">Nenhum produto encontrado com estes filtros.</div>';
+    } else {
+      grid.innerHTML = lista.map(p => productCardHTML(p)).join('');
+    }
+  }
+  fecharOverlay('filtrosOverlay');
+  showToast(`🔍 ${lista.length} produto(s) encontrado(s)`);
+}
+
+function limparFiltros() {
+  _filtros.cat = 'todos'; _filtros.origem = 'todos'; _filtros.prov = 'todos';
+  document.getElementById('filtroPrecoMin').value = '';
+  document.getElementById('filtroPrecoMax').value = '';
+  document.getElementById('filtroOrdem').value = 'recente';
+  document.querySelectorAll('.mk-filter-chip').forEach(c => {
+    c.classList.toggle('active', c.textContent.trim() === 'Todos' || c.textContent.trim() === 'Todas');
+  });
+  if (typeof renderProducts === 'function') renderProducts('todos');
+  fecharOverlay('filtrosOverlay');
+}
+
+// ═══════════════════════════════════════════════════
+// EDITAR PERFIL
+// ═══════════════════════════════════════════════════
+async function abrirEditarPerfil() {
+  document.getElementById('editNome').value = currentUser?.nome || '';
+  document.getElementById('editTel').value = currentUser?.tel || '';
+  document.getElementById('editProvincia').value = currentUser?.provincia || 'Huambo';
+  document.getElementById('editTipo').value = currentUser?.tipo || 'comprador';
+  document.getElementById('editarPerfilOverlay').classList.add('active');
+}
+
+async function guardarPerfil() {
+  const nome = document.getElementById('editNome').value.trim();
+  const tel = document.getElementById('editTel').value.trim();
+  const provincia = document.getElementById('editProvincia').value;
+  const tipo = document.getElementById('editTipo').value;
+
+  if (!nome) { showToast('⚠️ O nome não pode estar vazio.'); return; }
+
+  try {
+    if (window._fb && currentUser && !currentUser.guest) {
+      const { db, doc, updateDoc } = await _fbExtra();
+      await updateDoc(doc(db, 'usuarios', currentUser.uid), { nome, tel, provincia, tipo });
+    }
+    currentUser = { ...currentUser, nome, tel, provincia, tipo };
+
+    // Actualiza UI do perfil
+    const perfilNomeEl = document.getElementById('perfilNome');
+    const perfilProvEl = document.getElementById('perfilProvincia');
+    const perfilAvEl = document.getElementById('perfilAvatar');
+    if (perfilNomeEl) perfilNomeEl.textContent = nome;
+    if (perfilProvEl) perfilProvEl.textContent = provincia;
+    if (perfilAvEl) perfilAvEl.textContent = nome.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase();
+
+    fecharOverlay('editarPerfilOverlay');
+    showToast('✅ Perfil actualizado com sucesso!');
+  } catch(e) {
+    showToast('⚠️ Erro ao guardar perfil.');
+    console.error(e);
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// PATCH NO productCardHTML — adiciona badge FB e botão convite
+// ═══════════════════════════════════════════════════
+const _origProductCardHTML = typeof productCardHTML === 'function' ? productCardHTML : null;
+function productCardHTML(p, extraBtn = '') {
+  const fbBadge = p.fbOrigem
+    ? `<span class="mk-badge-fb"><svg viewBox="0 0 24 24" fill="white"><path d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.413c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.97h-1.513c-1.491 0-1.956.93-1.956 1.886v2.265h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg>Facebook</span>`
+    : '';
+  const fbBtn = p.fbOrigem
+    ? `<button style="width:100%;margin-top:.3rem;background:#1877F2;border:none;color:#fff;padding:.35rem;border-radius:6px;font-size:.72rem;cursor:pointer;font-weight:700;" onclick="event.stopPropagation();interesseEmProdutoFB('${p.id}')">🔵 Tenho Interesse</button>`
+    : '';
+
+  return `<div class="product-card" onclick="openProduto('${p.id}')">
+    <div class="product-img">
+      <img src="${p.img}" alt="${p.nome}" onerror="this.style.display='none';this.nextSibling.style.display='flex'">
+      <div class="emoji-fallback" style="display:none;">${p.emoji||'📦'}</div>
+      ${p.promovido?'<span class="badge-promovido">⚡ Promovido</span>':''}
+    </div>
+    <div class="product-body">
+      <div class="product-title">${p.nome}${fbBadge}</div>
+      <div class="seller-info"><span class="stars">${p.stars||'★★★★☆'}</span><span class="seller-name">${p.seller}</span></div>
+      <div class="product-price">${p.preco} Kz</div>
+      ${p.badge==='verificado'?'<span class="badge-verificado">✓ Verificado</span>':'<span class="badge-top">🏆 Top</span>'}
+      <button class="btn-add-cart" onclick="event.stopPropagation();addToCart('${p.id}')">🛒 Adicionar</button>
+      ${fbBtn}
+      ${extraBtn}
+      <button class="btn-share-card" onclick="event.stopPropagation();toggleCardShare(this)">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        Partilhar
+      </button>
+      <div class="card-share-panel">
+        <button class="share-btn fb" onclick="event.stopPropagation();shareProduct('facebook','${p.nome}','${p.preco}')">
+          <svg width="11" height="11" viewBox="0 0 24 24"><path fill="white" d="M24 12.073C24 5.405 18.627 0 12 0S0 5.405 0 12.073C0 18.1 4.388 23.094 10.125 24v-8.437H7.078v-3.49h3.047V9.413c0-3.025 1.792-4.697 4.533-4.697 1.312 0 2.686.236 2.686.236v2.97h-1.513c-1.491 0-1.956.93-1.956 1.886v2.265h3.328l-.532 3.49h-2.796V24C19.612 23.094 24 18.1 24 12.073z"/></svg>
+          Facebook
+        </button>
+        <button class="share-btn wa" onclick="event.stopPropagation();shareProduct('whatsapp','${p.nome}','${p.preco}')">
+          <svg width="11" height="11" viewBox="0 0 24 24"><path fill="white" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
+          WhatsApp
+        </button>
+        <button class="share-btn ig" onclick="event.stopPropagation();shareProduct('instagram','${p.nome}','${p.preco}')">
+          <svg width="11" height="11" viewBox="0 0 24 24"><path fill="white" d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
+          Instagram
+        </button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ═══════════════════════════════════════════════════
+// ADICIONAR BOTÕES NA UI — Filtros e FB Import
+// ═══════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  // Botão Filtros — injeta após a barra de pesquisa
+  setTimeout(() => {
+    const searchBar = document.querySelector('.search-bar, [class*="search"]');
+    const appMain = document.getElementById('appMain');
+
+    // Botão filtros avançados
+    const btnFiltros = document.createElement('div');
+    btnFiltros.style.cssText = 'display:flex;gap:.5rem;padding:.4rem 1rem;overflow-x:auto;scrollbar-width:none;';
+    btnFiltros.innerHTML = `
+      <button onclick="document.getElementById('filtrosOverlay').classList.add('active')"
+        style="flex-shrink:0;padding:.35rem .9rem;border-radius:20px;border:1px solid #E8200C;background:transparent;color:#E8200C;font-size:.75rem;font-weight:700;cursor:pointer;">
+        🔍 Filtrar
+      </button>
+      <button onclick="abrirImportadorFB()"
+        style="flex-shrink:0;padding:.35rem .9rem;border-radius:20px;border:1px solid #1877F2;background:transparent;color:#1877F2;font-size:.75rem;font-weight:700;cursor:pointer;">
+        🔵 Importar do Facebook
+      </button>
+      <button onclick="abrirPedidos()"
+        style="flex-shrink:0;padding:.35rem .9rem;border-radius:20px;border:1px solid #555;background:transparent;color:#aaa;font-size:.75rem;font-weight:700;cursor:pointer;">
+        📦 Pedidos
+      </button>`;
+
+    // Insere após a navbar
+    const nav = document.querySelector('.top-bar, nav, .navbar, [class*="topbar"]');
+    if (nav && nav.nextSibling) {
+      nav.parentNode.insertBefore(btnFiltros, nav.nextSibling.nextSibling);
+    } else if (appMain) {
+      appMain.insertBefore(btnFiltros, appMain.firstChild);
+    }
+
+    // Botão editar perfil no overlay de perfil
+    const perfilOverlay = document.getElementById('perfilOverlay');
+    if (perfilOverlay) {
+      const btnEditar = document.createElement('button');
+      btnEditar.textContent = '✏️ Editar Perfil';
+      btnEditar.style.cssText = 'width:100%;background:#2A2A2A;border:none;color:#F4F2EE;padding:.7rem;border-radius:9px;font-weight:700;cursor:pointer;margin-top:.5rem;';
+      btnEditar.onclick = abrirEditarPerfil;
+      const closeBtn = perfilOverlay.querySelector('button[onclick*="closeOverlay"], button[onclick*="fecharOverlay"]');
+      if (closeBtn) closeBtn.parentNode.insertBefore(btnEditar, closeBtn);
+    }
+  }, 1500);
+});
+
+// ═══════════════════════════════════════════════════
+// PATCH openProduto — adiciona botão avaliação e convite FB
+// ═══════════════════════════════════════════════════
+const _origOpenProduto = typeof openProduto === 'function' ? openProduto : null;
+function openProduto(id) {
+  if (_origOpenProduto) _origOpenProduto(id);
+  // Adiciona botão avaliar e convite FB após abrir overlay
+  setTimeout(() => {
+    const overlay = document.getElementById('produtoOverlay');
+    if (!overlay) return;
+    const p = PRODUTOS.find(x => String(x.id) === String(id));
+    if (!p) return;
+
+    // Remove botões antigos se existirem
+    overlay.querySelectorAll('.mk-extra-btn').forEach(b => b.remove());
+
+    const container = overlay.querySelector('.prod-actions, .modal-actions') ||
+                      overlay.querySelector('.modal-body') ||
+                      overlay.querySelector('[id*="modalCart"]')?.parentElement;
+    if (!container) return;
+
+    // Botão avaliar
+    const btnAvaliar = document.createElement('button');
+    btnAvaliar.className = 'mk-extra-btn';
+    btnAvaliar.style.cssText = 'width:100%;background:#2A2A2A;border:none;color:#F4F2EE;padding:.6rem;border-radius:8px;font-weight:700;cursor:pointer;margin-top:.4rem;font-size:.82rem;';
+    btnAvaliar.textContent = '⭐ Avaliar Vendedor';
+    btnAvaliar.onclick = () => abrirAvaliacao(p.sellerUid || '', p.seller, id);
+    container.appendChild(btnAvaliar);
+
+    // Botão convite FB se produto for do Facebook
+    if (p.fbOrigem) {
+      const btnConvite = document.createElement('button');
+      btnConvite.className = 'mk-extra-btn';
+      btnConvite.style.cssText = 'width:100%;background:#1877F2;border:none;color:#fff;padding:.6rem;border-radius:8px;font-weight:700;cursor:pointer;margin-top:.4rem;font-size:.82rem;';
+      btnConvite.textContent = '🔵 Convidar Vendedor ao MerkaAO';
+      btnConvite.onclick = () => interesseEmProdutoFB(id);
+      container.appendChild(btnConvite);
+    }
+  }, 100);
+}
+
+// ═══════════════════════════════════════════════════
+// REGRAS FIRESTORE ADICIONAIS — adiciona colecção avaliacoes e pedidos
+// (lembrete para o utilizador actualizar as regras)
+// ═══════════════════════════════════════════════════
+console.log('%c[MerkaAO] Melhorias carregadas ✅', 'color:#E8200C;font-weight:bold;font-size:14px;');
+console.log('%c[MerkaAO] Adiciona estas colecções às regras Firestore:\n• pedidos\n• avaliacoes\n• usuarios', 'color:#1877F2;');
+</script>
 
 </body>
 <!-- ══════════════════════════════════════
