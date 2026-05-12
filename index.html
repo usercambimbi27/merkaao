@@ -87,7 +87,7 @@
       await updateProfile(cred.user, { displayName: nome });
       // Guarda dados do utilizador no Firestore
       const { doc, setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js");
-      await setDoc(doc(db, 'usuarios', cred.user.uid), {
+      await setDoc(doc(db, 'utilizadores', cred.user.uid), {
         nome,
         email,
         tel: tel || '',
@@ -124,19 +124,31 @@
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     },
     async enviarMsg(chatId, msg, meta) {
+      // 1 — Guarda a mensagem na sub-colecção
       await addDoc(collection(db, 'chats', chatId, 'mensagens'), {
         ...msg,
         criadoEm: serverTimestamp()
       });
-      // Guarda metadata do chat usando setDoc-like pattern
+      // 2 — Guarda/actualiza metadata com setDoc (id fixo = chatId, sem duplicados)
       if (meta) {
+        const metaRef = doc(db, 'chatsmeta', chatId);
         try {
-          const chatRef = doc(db, 'chats', chatId);
-          await updateDoc(chatRef, { ...meta, ultimaMensagem: serverTimestamp() });
+          await updateDoc(metaRef, {
+            ...meta,
+            ultimaMensagem: serverTimestamp(),
+            ultimoTexto: msg.texto || '',
+            lida: false
+          });
         } catch(e) {
-          // doc não existe — adiciona na colecção chats com id fixo
-          await addDoc(collection(db, 'chatsmeta'), {
-            chatId, ...meta, ultimaMensagem: serverTimestamp()
+          // Documento ainda não existe — cria com setDoc
+          const { setDoc } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js");
+          await setDoc(metaRef, {
+            chatId,
+            ...meta,
+            ultimaMensagem: serverTimestamp(),
+            ultimoTexto: msg.texto || '',
+            lida: false,
+            criadoEm: serverTimestamp()
           });
         }
       }
@@ -231,6 +243,7 @@
               nome: p.nome || 'Sem nome',
               preco: p.preco || '0',
               seller: p.seller || 'Vendedor',
+              sellerUid: p.sellerUid || p.uid || '',
               stars: '★★★★☆',
               rating: 4.5,
               vendas: 0,
@@ -1054,7 +1067,7 @@ footer strong{color:var(--areia);}
     </button>
     <button class="nav-btn" onclick="toggleNotif()" style="position:relative;" title="Notificações">
       🔔
-      <span class="cart-badge" id="notifBadge" style="background:var(--vermelho);color:white;">3</span>
+      <span class="cart-badge" id="notifBadge" style="background:var(--vermelho);color:white;display:none;">0</span>
     </button>
     <button class="nav-btn primary" onclick="openCart()" style="position:relative;" title="Carrinho">
       🛒
@@ -1654,6 +1667,9 @@ let cameraStream = null;
 let capturedImageData = null;
 let aiEnhancedImage = null;
 let facingMode = 'environment';
+let activeLeilaoId = null;
+let leilaoTimerInterval = null;
+let _leilaoUnsubscribe = null;
 
 // ===========================================
 // AUTH
@@ -1756,10 +1772,21 @@ async function socialLogin(provider) {
   }
 }
 
-function forgotPass() {
+async function forgotPass() {
   const email = document.getElementById('loginEmail').value.trim();
   if (!email) { showToast('Introduz o teu e-mail primeiro.'); return; }
-  showToast('📧 Link de recuperação enviado para '+email);
+  try {
+    await esperarFirebase();
+    const { getAuth, sendPasswordResetEmail } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js");
+    const auth = getAuth();
+    await sendPasswordResetEmail(auth, email);
+    showToast('📧 Link de recuperação enviado para ' + email);
+  } catch(e) {
+    const msg = e.code === 'auth/user-not-found' ? 'Email não encontrado.' :
+                e.code === 'auth/invalid-email' ? 'Email inválido.' :
+                'Erro ao enviar email. Tenta de novo.';
+    showToast('⚠️ ' + msg);
+  }
 }
 
 function enterAsGuest() {
@@ -1787,6 +1814,25 @@ function enterApp() {
     window.dispatchEvent(new Event('merkaao:loggedin'));
     setTimeout(iniciarNotificacoes, 1500);
     setTimeout(actualizarBadgeMensagens, 2500);
+    // ── Regista login na colecção 'logins' (para painel admin) ──
+    if (window._fb && currentUser && !currentUser.guest) {
+      (async () => {
+        try {
+          const { getFirestore, collection, addDoc, serverTimestamp: sts } =
+            await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js");
+          const _db = getFirestore();
+          await addDoc(collection(_db, 'logins'), {
+            uid: currentUser.uid || '',
+            nome: currentUser.nome || '',
+            email: currentUser.email || '',
+            metodo: currentUser.uid?.startsWith('local_') ? 'offline' :
+                    (document.getElementById('loginEmail')?.value ? 'email' : 'google'),
+            timestamp: sts(),
+            provincia: currentUser.provincia || ''
+          });
+        } catch(e) { console.log('Login log:', e); }
+      })();
+    }
     // Carrega produtos reais do Firestore
     if (window._fb) {
       window._fb.carregarProdutos().then(prods => {
@@ -2080,42 +2126,60 @@ function clearSearch() {
 // MODALS PRODUTO + LEILÃO
 // ===========================================
 function openProduto(id) {
-  const p = PRODUTOS.find(x => x.id === id || x.id === String(id) || String(x.id) === String(id));
-  if (!p) return;
+  const p = PRODUTOS.find(x => String(x.id) === String(id));
+  if (!p) { console.warn('[MerkaAO] openProduto: produto não encontrado, id=', id); return; }
 
-  document.getElementById('modalProdTitle').textContent = p.nome;
-  document.getElementById('modalProdPrice').textContent = p.preco + ' Kz';
-  document.getElementById('modalProdBadge').innerHTML = p.badge==='verificado'
+  // ── Título, preço, badge ──
+  const titleEl = document.getElementById('modalProdTitle');
+  const priceEl = document.getElementById('modalProdPrice');
+  const badgeEl = document.getElementById('modalProdBadge');
+  const descEl  = document.getElementById('modalProdDesc');
+  const cidadeEl = document.getElementById('modalProdCidade');
+
+  if (titleEl)  titleEl.textContent = p.nome || 'Produto';
+  if (priceEl)  priceEl.textContent = (p.preco || '0') + ' Kz';
+  if (badgeEl)  badgeEl.innerHTML   = p.badge === 'verificado'
     ? '<span class="badge-verificado">✓ Verificado</span>'
     : '<span class="badge-top">🏆 Top</span>';
-  document.getElementById('modalProdDesc').textContent = p.desc || 'Sem descrição disponível.';
+  if (descEl)   descEl.textContent  = p.desc || 'Sem descrição disponível.';
+  if (cidadeEl) cidadeEl.innerHTML  = p.cidade ? `📍 ${p.cidade}` : '';
 
-  // Cidade
-  const cidadeEl = document.getElementById('modalProdCidade');
-  if (cidadeEl) cidadeEl.innerHTML = p.cidade ? `📍 ${p.cidade}` : '';
+  // ── Vendedor ──
+  const sellerNameEl   = document.getElementById('modalSellerName');
+  const sellerStarsEl  = document.getElementById('modalSellerStars');
+  const sellerExtraEl  = document.getElementById('modalSellerExtra');
+  const sellerBadgeEl  = document.getElementById('modalSellerBadges');
+  const sellerAvatarEl = document.getElementById('modalSellerAvatar');
 
-  // Vendedor
-  document.getElementById('modalSellerName').textContent = p.seller;
-  document.getElementById('modalSellerStars').textContent = (p.stars || '★★★★☆') + ' ' + (p.rating || '');
-  document.getElementById('modalSellerExtra').innerHTML = (p.vendas || 0) + ' vendas';
-  document.getElementById('modalSellerBadges').innerHTML = p.badge==='verificado'
+  if (sellerNameEl)   sellerNameEl.textContent = p.seller || 'Vendedor';
+  if (sellerStarsEl)  sellerStarsEl.textContent = (p.stars || '★★★★☆') + (p.rating ? ' ' + p.rating : '');
+  if (sellerExtraEl)  sellerExtraEl.innerHTML   = (p.vendas || 0) + ' vendas';
+  if (sellerBadgeEl)  sellerBadgeEl.innerHTML   = p.badge === 'verificado'
     ? '<span class="badge-verificado">✓ BI Verificado</span>'
     : '<span class="badge-top">🏆 Top Vendedor</span>';
-  const av = document.getElementById('modalSellerAvatar');
-  av.textContent = p.seller[0];
-  av.style.background = p.badge==='verificado' ? 'var(--vermelho)' : '#4A90D9';
+  if (sellerAvatarEl) {
+    sellerAvatarEl.textContent  = (p.seller || 'V')[0].toUpperCase();
+    sellerAvatarEl.style.background = p.badge === 'verificado' ? 'var(--vermelho)' : '#4A90D9';
+  }
 
-  // Imagem
-  const fallbackImg = `<div style="font-size:5rem;display:flex;align-items:center;justify-content:center;height:220px;background:var(--cinza2);">${p.emoji||'📦'}</div>`;
-  document.getElementById('modalImgWrap').innerHTML = p.img
-    ? `<img src="${p.img}" alt="${p.nome}" style="width:100%;height:220px;object-fit:cover;" onerror="this.parentElement.innerHTML=this.parentElement.dataset.fb">`
-    : fallbackImg;
-  if (p.img) document.getElementById('modalImgWrap').dataset.fb = fallbackImg;
+  // ── Imagem ──
+  const imgWrap = document.getElementById('modalImgWrap');
+  if (imgWrap) {
+    const fallbackHTML = `<div style="font-size:5rem;display:flex;align-items:center;justify-content:center;height:220px;background:var(--cinza2);">${p.emoji || '📦'}</div>`;
+    if (p.img) {
+      imgWrap.innerHTML = `<img src="${p.img}" alt="${p.nome}" style="width:100%;height:220px;object-fit:cover;" onerror="this.outerHTML='${fallbackHTML.replace(/'/g,"&#39;")}'">`; 
+    } else {
+      imgWrap.innerHTML = fallbackHTML;
+    }
+  }
 
-  // Botão carrinho
-  document.getElementById('modalCartBtn').onclick = () => { addToCart(id); closeOverlay('produtoOverlay'); openCart(); };
+  // ── Botão Carrinho ──
+  const cartBtn = document.getElementById('modalCartBtn');
+  if (cartBtn) {
+    cartBtn.onclick = () => { addToCart(String(p.id)); closeOverlay('produtoOverlay'); openCart(); };
+  }
 
-  // Botão mensagem interna
+  // ── Botão Mensagem ──
   const msgBtn = document.getElementById('modalWhatsBtn');
   if (msgBtn) {
     msgBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg> Mensagem`;
@@ -2123,56 +2187,221 @@ function openProduto(id) {
     msgBtn.onclick = () => { closeOverlay('produtoOverlay'); abrirChat(p); };
   }
 
-  // Wishlist
-  const wb = document.getElementById('modalWishBtn');
-  const inWish = wishlist.find(w => w.id === id);
-  wb.textContent = inWish ? '💔' : '❤️';
-  wb.onclick = () => { toggleWishlistItem(id, wb); };
+  // ── Wishlist ──
+  const wishBtn = document.getElementById('modalWishBtn');
+  if (wishBtn) {
+    const inWish = (typeof wishlist !== 'undefined') && wishlist.find(w => String(w.id) === String(id));
+    wishBtn.textContent = inWish ? '💔' : '❤️';
+    wishBtn.onclick = () => { toggleWishlistItem(String(p.id), wishBtn); };
+  }
 
-  document.getElementById('produtoOverlay').classList.add('active');
+  // ── Botões extra: Avaliar + Convite FB ──
+  const actionsContainer = document.getElementById('modalCartBtn')?.parentElement;
+  if (actionsContainer) {
+    actionsContainer.querySelectorAll('.mk-extra-btn').forEach(b => b.remove());
+
+    const btnAvaliar = document.createElement('button');
+    btnAvaliar.className = 'mk-extra-btn';
+    btnAvaliar.style.cssText = 'width:100%;background:#2A2A2A;border:none;color:#F4F2EE;padding:.6rem;border-radius:8px;font-weight:700;cursor:pointer;margin-top:.4rem;font-size:.82rem;';
+    btnAvaliar.textContent = '⭐ Avaliar Vendedor';
+    btnAvaliar.onclick = () => abrirAvaliacao(p.sellerUid || '', p.seller, String(p.id));
+    actionsContainer.appendChild(btnAvaliar);
+
+    if (p.fbOrigem) {
+      const btnConvite = document.createElement('button');
+      btnConvite.className = 'mk-extra-btn';
+      btnConvite.style.cssText = 'width:100%;background:#1877F2;border:none;color:#fff;padding:.6rem;border-radius:8px;font-weight:700;cursor:pointer;margin-top:.4rem;font-size:.82rem;';
+      btnConvite.textContent = '🔵 Convidar Vendedor ao MerkaAO';
+      btnConvite.onclick = () => interesseEmProdutoFB(String(p.id));
+      actionsContainer.appendChild(btnConvite);
+    }
+  }
+
+  // ── Abre o overlay ──
+  const overlay = document.getElementById('produtoOverlay');
+  if (overlay) overlay.classList.add('active');
 }
 
-let activeLeilaoId = null, leilaoTimerInterval = null;
+// ══════════════════════════════════════════════════════════
+// SISTEMA DE LEILÕES REAL — Firestore + Tempo Real
+// ══════════════════════════════════════════════════════════
 
+
+// Formata tempo (reutiliza função existente)
+// formatTime() já existe
+
+// Carrega todos os leilões do Firestore e escuta em tempo real
+async function carregarLeiloesFirestore() {
+  if (!window._fb) return;
+  try {
+    const { db, collection, query, orderBy, onSnapshot, where } = await _fbExtra();
+    if (_leilaoUnsubscribe) _leilaoUnsubscribe();
+
+    const q = query(
+      collection(db, 'leiloes'),
+      where('encerrado', '==', false),
+      orderBy('fimEm', 'asc')
+    );
+
+    _leilaoUnsubscribe = onSnapshot(q, (snap) => {
+      const now = Date.now();
+      LEILOES.length = 0; // limpa array existente sem perder referência
+      snap.docs.forEach(d => {
+        const data = d.data();
+        const fimMs = data.fimEm?.toMillis ? data.fimEm.toMillis() : (data.fimEm?.seconds * 1000 || now + 86400000);
+        const timerSecs = Math.max(0, Math.floor((fimMs - now) / 1000));
+        LEILOES.push({
+          id: d.id,
+          nome: data.nome || 'Leilão',
+          img: data.img || '',
+          emoji: data.emoji || '🏷️',
+          lance: data.lanceAtual ? data.lanceAtual.toLocaleString('pt-PT') : '0',
+          lances: data.totalLances || 0,
+          timer: timerSecs,
+          fimMs,
+          historico: data.historico || [],
+          vendedor: data.vendedor || '',
+          vendedorUid: data.vendedorUid || '',
+          seller: data.vendedor || 'Vendedor',
+          stars: '★★★★☆',
+          badge: 'verificado',
+          promovido: false,
+          lanceAtualNum: data.lanceAtual || 0,
+          encerrado: timerSecs <= 0
+        });
+      });
+      renderAuctions();
+      // Actualiza modal se estiver aberto
+      if (activeLeilaoId) {
+        const l = LEILOES.find(x => x.id === activeLeilaoId);
+        if (l) _actualizarModalLeilao(l);
+      }
+    });
+  } catch(e) { console.log('Leilões Firestore:', e); }
+}
+
+// Actualiza o modal com dados frescos do Firestore
+function _actualizarModalLeilao(l) {
+  const bidEl = document.getElementById('modalBid');
+  const countEl = document.getElementById('modalBidCount');
+  const histEl = document.getElementById('bidHistory');
+  if (bidEl) bidEl.textContent = l.lance + ' Kz';
+  if (countEl) countEl.textContent = l.lances;
+  if (histEl) histEl.innerHTML = (l.historico || []).map((h, i) =>
+    `<div class="bid-item ${i===0?'bid-winner':''}"><span>${h.split('—')[0]}</span><span class="amount">${(h.split('—')[1]||'').trim()}</span></div>`
+  ).join('');
+}
+
+// Abre leilão com timer em tempo real
 function openLeilao(id) {
   const l = LEILOES.find(x => x.id === id);
   if (!l) return;
   activeLeilaoId = id;
+
   document.getElementById('leilaoTitle').textContent = l.nome;
   document.getElementById('modalBid').textContent = l.lance + ' Kz';
   document.getElementById('modalBidCount').textContent = l.lances;
   document.getElementById('bidInput').value = '';
-  document.getElementById('bidInput').placeholder = (parseInt(l.lance.replace(/\./g,'')) + 1000).toLocaleString('pt-PT');
-  document.getElementById('bidHistory').innerHTML = l.historico.map(h => `<div class="bid-item"><span>${h.split('—')[0]}</span><span class="amount">${h.split('—')[1]?.trim()}</span></div>`).join('');
+  document.getElementById('bidInput').placeholder = (l.lanceAtualNum + 1000).toLocaleString('pt-PT');
+  _actualizarModalLeilao(l);
   document.getElementById('leilaoOverlay').classList.add('active');
+
   if (leilaoTimerInterval) clearInterval(leilaoTimerInterval);
   leilaoTimerInterval = setInterval(() => {
     const leil = LEILOES.find(x => x.id === activeLeilaoId);
     if (!leil) return;
-    if (leil.timer > 0) leil.timer--;
-    document.getElementById('modalTimer').textContent = formatTime(leil.timer);
+    const secsLeft = Math.max(0, Math.floor((leil.fimMs - Date.now()) / 1000));
+    leil.timer = secsLeft;
+    const timerEl = document.getElementById('modalTimer');
+    if (timerEl) timerEl.textContent = formatTime(secsLeft);
+    if (secsLeft <= 0) {
+      clearInterval(leilaoTimerInterval);
+      leilaoTimerInterval = null;
+      if (timerEl) timerEl.textContent = '⏰ Encerrado';
+      document.getElementById('bidInput').disabled = true;
+      const bidBtn = document.querySelector('#leilaoOverlay .bid-btn, #leilaoOverlay button[onclick*="confirmarLicitacao"]');
+      if (bidBtn) { bidBtn.disabled = true; bidBtn.textContent = '⏰ Leilão encerrado'; }
+    }
   }, 1000);
 }
 
-function confirmarLicitacao() {
+// Confirmar licitação — escreve no Firestore
+async function confirmarLicitacao() {
   const l = LEILOES.find(x => x.id === activeLeilaoId);
   if (!l) return;
-  const val = parseInt(document.getElementById('bidInput').value);
-  const atual = parseInt(l.lance.replace(/\./g,''));
-  if (!val || val <= atual) { showToast('⚠️ A licitação deve ser superior a ' + l.lance + ' Kz'); return; }
-  if (l.timer < 300) { l.timer += 300; showToast('⏱ Leilão estendido 5 min — anti-snipe activado!'); }
-  l.lance = val.toLocaleString('pt-PT');
-  l.lances++;
-  l.historico.unshift((currentUser?.nome || 'Tu') + ' (agora) — ' + val.toLocaleString('pt-PT') + ' Kz');
-  document.getElementById('modalBid').textContent = l.lance + ' Kz';
-  document.getElementById('modalBidCount').textContent = l.lances;
-  document.getElementById('bidHistory').innerHTML = l.historico.map((h,i) =>
-    `<div class="bid-item ${i===0?'bid-winner':''}"><span>${h.split('—')[0]}</span><span class="amount">${h.split('—')[1]?.trim()}</span></div>`).join('');
-  document.getElementById('bidInput').value = '';
-  document.getElementById('bidInput').placeholder = (val+1000).toLocaleString('pt-PT');
-  renderAuctions();
-  showToast('✓ Licitação de ' + val.toLocaleString('pt-PT') + ' Kz confirmada!');
+
+  if (l.timer <= 0) { showToast('⏰ Este leilão já encerrou.'); return; }
+  if (!currentUser || currentUser.guest) { showToast('⚠️ Faz login para licitar!'); return; }
+
+  const val = parseInt(document.getElementById('bidInput').value.replace(/\./g,''));
+  if (!val || val <= l.lanceAtualNum) {
+    showToast('⚠️ A licitação deve ser superior a ' + l.lance + ' Kz');
+    return;
+  }
+
+  const bidBtn = document.querySelector('#leilaoOverlay button[onclick*="confirmarLicitacao"]');
+  if (bidBtn) { bidBtn.disabled = true; bidBtn.textContent = '⏳ A registar...'; }
+
+  try {
+    const { db, doc, updateDoc, serverTimestamp, arrayUnion } = await _fbExtra();
+    const novaEntrada = currentUser.nome + ' (' + new Date().toLocaleTimeString('pt-PT', {hour:'2-digit',minute:'2-digit'}) + ') — ' + val.toLocaleString('pt-PT') + ' Kz';
+    const antiSnipe = l.timer < 300; // menos de 5 min — extensão anti-sniping
+
+    await updateDoc(doc(db, 'leiloes', activeLeilaoId), {
+      lanceAtual: val,
+      totalLances: l.lances + 1,
+      ultimoLicitante: currentUser.nome,
+      ultimoLicitanteUid: currentUser.uid,
+      historico: arrayUnion(novaEntrada),
+      ...(antiSnipe ? { fimEm: new Date(Date.now() + 5 * 60 * 1000) } : {}),
+      updatedAt: serverTimestamp()
+    });
+
+    document.getElementById('bidInput').value = '';
+    document.getElementById('bidInput').placeholder = (val + 1000).toLocaleString('pt-PT');
+    if (antiSnipe) showToast('⏱ Anti-sniping: leilão estendido 5 min!');
+    else showToast('✓ Licitação de ' + val.toLocaleString('pt-PT') + ' Kz confirmada!');
+
+    // Notifica utilizador
+    if (window._fb) {
+      window._fb.criarNotificacao(currentUser.uid, 'licitacao',
+        `A tua licitação de ${val.toLocaleString('pt-PT')} Kz em "${l.nome}" foi registada!`, '🔨').catch(()=>{});
+    }
+  } catch(e) {
+    showToast('⚠️ Erro ao registar licitação. Tenta de novo.');
+    console.error(e);
+  } finally {
+    if (bidBtn) { bidBtn.disabled = false; bidBtn.textContent = '🔨 Licitar'; }
+  }
 }
+
+// Publicar novo leilão (checkbox "publicar como leilão")
+async function publicarComoLeilao(dadosProduto, duracaoHoras = 24) {
+  if (!window._fb || !currentUser || currentUser.guest) return null;
+  try {
+    const { db, collection, addDoc, serverTimestamp } = await _fbExtra();
+    const fimEm = new Date(Date.now() + duracaoHoras * 3600 * 1000);
+    const ref = await addDoc(collection(db, 'leiloes'), {
+      nome: dadosProduto.nome,
+      img: dadosProduto.img || '',
+      emoji: dadosProduto.emoji || '🏷️',
+      lanceAtual: parseInt((dadosProduto.preco || '0').replace(/\./g,'')) || 0,
+      totalLances: 0,
+      historico: [],
+      vendedor: currentUser.nome,
+      vendedorUid: currentUser.uid,
+      fimEm,
+      encerrado: false,
+      criadoEm: serverTimestamp()
+    });
+    return ref.id;
+  } catch(e) { console.error('Erro ao criar leilão:', e); return null; }
+}
+
+// Inicia carregamento de leilões após login
+window.addEventListener('merkaao:loggedin', () => {
+  setTimeout(carregarLeiloesFirestore, 800);
+});
 
 function closeOverlay(id) {
   document.getElementById(id).classList.remove('active');
@@ -2251,12 +2480,7 @@ function renderCart() {
 function openCart() { document.getElementById('cartDrawer').classList.add('open'); document.getElementById('cartBg').classList.add('visible'); renderCart(); }
 function closeCart() { document.getElementById('cartDrawer').classList.remove('open'); document.getElementById('cartBg').classList.remove('visible'); }
 
-function checkout(method) {
-  if (cart.length === 0) { showToast('⚠️ O carrinho está vazio!'); return; }
-  if (method === 'multicaixa') showToast('💳 A processar pagamento Multicaixa Express...');
-  else showToast('💬 Pedido enviado! O vendedor vai confirmar via WhatsApp.');
-  cart = []; updateCartBadge(); renderCart(); closeCart();
-}
+// checkout() definido na secção de melhorias abaixo — com Firestore + Multicaixa real
 
 // ===========================================
 // WISHLIST
@@ -2411,18 +2635,8 @@ async function abrirPerfil() {
   const msgContainer = document.getElementById('perfilMensagens');
   if (msgContainer && window._fb && currentUser?.uid) {
     try {
-      const uid = currentUser.uid;
-      // Procura conversas na colecção chatsmeta
-      const q = window._fb._query
-        ? window._fb._query(uid)
-        : null;
-
-      // Alternativa: procura nas mensagens recentes por remetenteId
-      const snap = await window._fb.carregarConversas(uid).catch(() => []);
-
+      const snap = await window._fb.carregarConversas(currentUser.uid).catch(() => []);
       if (!snap.length) {
-        // Tenta buscar de chatsmeta directamente
-        const chatIds = Object.keys(localStorage).filter(k => k.includes(uid)).map(k => k);
         msgContainer.innerHTML = '<div style="text-align:center;color:var(--cinza3);font-size:.78rem;padding:.8rem;">Sem conversas ainda.</div>';
       } else {
         msgContainer.innerHTML = snap.map(c => `
@@ -2461,18 +2675,24 @@ async function abrirCaixaMensagens() {
       return;
     }
     list.innerHTML = conversas.map(c => {
-      const outroNome = c.compradorNome === currentUser.nome ? c.vendedorNome : c.compradorNome;
-      return `<div style="display:flex;align-items:center;gap:.8rem;padding:.9rem 1.2rem;border-bottom:1px solid #222;cursor:pointer;"
-        onclick="closeOverlay('caixaMsgOverlay');reabrirChat('${c.chatId||c.id}','${c.produtoNome||''}','${outroNome||''}','${c.produtoImg||''}','${c.produtoPreco||''}')">
+      const iAmComprador = c.compradorNome === currentUser.nome;
+      const outroNome = iAmComprador ? c.vendedorNome : c.compradorNome;
+      const sellerUid = iAmComprador ? (c.sellerUid || '') : currentUser.uid;
+      const temNaoLida = c.lida === false && c.ultimoRemetenteId !== currentUser.uid;
+      return `<div style="display:flex;align-items:center;gap:.8rem;padding:.9rem 1.2rem;border-bottom:1px solid #222;cursor:pointer;background:${temNaoLida?'#1a1a2e':'transparent'};"
+        onclick="closeOverlay('caixaMsgOverlay');reabrirChat('${c.chatId||c.id}','${(c.produtoNome||'').replace(/'/g,'')}','${(outroNome||'').replace(/'/g,'')}','${c.produtoImg||''}','${c.produtoPreco||''}','${sellerUid}')">
         <div style="width:42px;height:42px;border-radius:8px;background:var(--cinza2);flex-shrink:0;overflow:hidden;display:flex;align-items:center;justify-content:center;">
           ${c.produtoImg ? `<img src="${c.produtoImg}" style="width:100%;height:100%;object-fit:cover;">` : '<span style="font-size:1.3rem;">📦</span>'}
         </div>
         <div style="flex:1;min-width:0;">
-          <div style="font-weight:600;font-size:.83rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${outroNome || 'Utilizador'}</div>
+          <div style="font-weight:${temNaoLida?'800':'600'};font-size:.83rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${temNaoLida?'#fff':'inherit'};">${outroNome || 'Utilizador'}</div>
           <div style="font-size:.72rem;color:var(--cinza3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.produtoNome || 'Produto'}</div>
-          <div style="font-size:.7rem;color:var(--cinza3);margin-top:.1rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.ultimoTexto || '...'}</div>
+          <div style="font-size:.7rem;color:${temNaoLida?'var(--areia)':'var(--cinza3)'};margin-top:.1rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${c.ultimoTexto || '...'}</div>
         </div>
-        <span style="color:var(--azul);font-size:1rem;">›</span>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.3rem;">
+          ${temNaoLida ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--vermelho);display:block;"></span>' : ''}
+          <span style="color:var(--azul);font-size:1rem;">›</span>
+        </div>
       </div>`;
     }).join('');
 
@@ -2485,38 +2705,63 @@ async function abrirCaixaMensagens() {
 
 // Actualiza badge de mensagens quando há conversas novas
 async function actualizarBadgeMensagens() {
-  if (!window._fb || !currentUser?.uid) return;
+  if (!window._fb || !currentUser?.uid || currentUser.guest) return;
   try {
     const conversas = await window._fb.carregarConversas(currentUser.uid);
     const badge = document.getElementById('msgBadge');
-    if (conversas.length > 0) {
-      badge.textContent = conversas.length;
+    if (!badge) return;
+    // Conta conversas com mensagens não lidas (lida === false e não sou o remetente)
+    const naoLidas = conversas.filter(c =>
+      c.lida === false &&
+      c.ultimoRemetenteId !== currentUser.uid
+    ).length;
+    if (naoLidas > 0) {
+      badge.textContent = naoLidas;
       badge.style.display = 'flex';
+    } else {
+      badge.style.display = 'none';
     }
   } catch(e) {}
 }
 
-function reabrirChat(chatId, produtoNome, outroNome, produtoImg, produtoPreco) {
+function reabrirChat(chatId, produtoNome, outroNome, produtoImg, produtoPreco, sellerUid) {
   if (!currentUser) return;
   _activeChatId = chatId;
-  _activeProduto = { nome: produtoNome, img: produtoImg, preco: produtoPreco };
+  // Reconstrói _activeProduto com todos os dados necessários
+  _activeProduto = {
+    nome: produtoNome || '',
+    img: produtoImg || '',
+    preco: produtoPreco || '',
+    seller: outroNome || 'Vendedor',
+    sellerUid: sellerUid || ''
+  };
 
-  document.getElementById('msgSellerAv').textContent = outroNome?.[0] || '?';
+  document.getElementById('msgSellerAv').textContent = outroNome?.[0]?.toUpperCase() || '?';
   document.getElementById('msgSellerNome').textContent = outroNome || 'Utilizador';
-  document.getElementById('msgProdNome').textContent = produtoNome;
+  document.getElementById('msgProdNome').textContent = produtoNome || '';
   document.getElementById('msgProdPreco').textContent = produtoPreco ? produtoPreco + ' Kz' : '';
   const imgEl = document.getElementById('msgProdImg');
   imgEl.innerHTML = produtoImg
-    ? `<img src="${produtoImg}" style="width:100%;height:100%;object-fit:cover;border-radius:5px;">`
+    ? `<img src="${produtoImg}" style="width:100%;height:100%;object-fit:cover;border-radius:5px;" onerror="this.outerHTML='<span>📦</span>'">`
     : '📦';
 
+  // Marca conversa como lida
+  if (window._fb) {
+    _fbExtra().then(({ db, doc, updateDoc }) => {
+      updateDoc(doc(db, 'chatsmeta', chatId), { lida: true }).catch(() => {});
+    });
+  }
+
   closeOverlay('perfilOverlay');
+  closeOverlay('caixaMsgOverlay');
   document.getElementById('msgOverlay').classList.add('active');
 
   if (_unsubChat) _unsubChat();
   if (window._fb) {
     _unsubChat = window._fb.ouvirMsgs(chatId, renderMensagens);
   }
+  // Actualiza badge após marcar como lida
+  setTimeout(actualizarBadgeMensagens, 800);
 }
 // ===========================================
 function abrirPublicar() {
@@ -2598,9 +2843,18 @@ async function enviarMensagem() {
   const input = document.getElementById('msgInput');
   const texto = input.value.trim();
   if (!texto || !_activeChatId) return;
+
+  // Bloqueia utilizadores não autenticados
+  if (!currentUser || currentUser.guest || (currentUser.uid && currentUser.uid.startsWith('local_'))) {
+    showToast('⚠️ Precisas de entrar na tua conta para enviar mensagens.');
+    return;
+  }
+
   input.value = '';
 
-  const compradorId = currentUser?.uid || currentUser?.email;
+  const compradorId = currentUser.uid;
+  const sellerUid = _activeProduto?.sellerUid || _activeProduto?.uid || '';
+
   const msg = {
     texto,
     remetenteId: compradorId,
@@ -2610,14 +2864,16 @@ async function enviarMensagem() {
   };
 
   const meta = {
-    participantes: [compradorId, _activeProduto?.sellerUid || 'vendedor'],
+    participantes: [compradorId, sellerUid].filter(Boolean),
     compradorNome: currentUser?.nome || 'Comprador',
     vendedorNome: _activeProduto?.seller || 'Vendedor',
     produtoNome: _activeProduto?.nome || '',
     produtoImg: _activeProduto?.img || '',
     produtoPreco: _activeProduto?.preco || '',
     ultimoTexto: texto,
-    chatId: _activeChatId
+    ultimoRemetenteId: compradorId,
+    chatId: _activeChatId,
+    lida: false
   };
 
   try {
@@ -2625,9 +2881,9 @@ async function enviarMensagem() {
       await window._fb.enviarMsg(_activeChatId, msg, meta);
       setTimeout(actualizarBadgeMensagens, 500);
       // Notifica o vendedor se não for o próprio
-      if (_activeProduto?.sellerUid && _activeProduto.sellerUid !== currentUser?.uid) {
+      if (sellerUid && sellerUid !== compradorId) {
         await window._fb.criarNotificacao(
-          _activeProduto.sellerUid,
+          sellerUid,
           'nova_mensagem',
           `${currentUser?.nome || 'Alguém'} enviou uma mensagem sobre "${_activeProduto?.nome}"`,
           '💬'
@@ -2681,7 +2937,7 @@ async function publicarProduto() {
   const catKey = cat.toLowerCase().replace(/[^a-z]/g,'');
   const emoji = emojiMap[catKey] || '📦';
 
-  const btn = document.querySelector('#publishOverlay .pub-btn');
+  const btn = document.querySelector('#publishOverlay .pub-submit');
   if (btn) { btn.textContent = '⏳ A publicar...'; btn.disabled = true; }
 
   try {
@@ -2705,11 +2961,25 @@ async function publicarProduto() {
 
     if (btn) btn.textContent = '💾 A guardar...';
 
+    const isLeilao = document.getElementById('pubLeilao')?.checked;
+
     if (window._fb) {
       const docId = await window._fb.guardarProduto(dados);
       PRODUTOS.unshift({ id: docId, stars:'★★★★☆', rating:4.5, vendas:0, ...dados });
       renderProducts('todos');
-      showToast('🔥 Produto "'+nome+'" publicado com imagem real!');
+
+      // Se checkbox leilão activado — cria também na colecção leiloes
+      if (isLeilao) {
+        if (btn) btn.textContent = '🔨 A criar leilão...';
+        const leilaoId = await publicarComoLeilao({ ...dados, id: docId }, 24);
+        if (leilaoId) {
+          showToast('🔨 Produto "'+nome+'" publicado como leilão (24h)!');
+        } else {
+          showToast('🔥 Produto publicado! (leilão requer login verificado)');
+        }
+      } else {
+        showToast('🔥 Produto "'+nome+'" publicado com imagem real!');
+      }
       notificarNovoProduto(nome);
     } else {
       PRODUTOS.unshift({ id: Date.now(), stars:'★★★★☆', rating:4.5, vendas:0, ...dados });
@@ -2720,10 +2990,11 @@ async function publicarProduto() {
     showToast('⚠️ Erro ao publicar. Tenta de novo.');
     console.error(e);
   } finally {
-    if (btn) { btn.textContent = '🚀 Publicar Produto'; btn.disabled = false; }
+    if (btn) { btn.textContent = '✓ Publicar Agora — Grátis'; btn.disabled = false; }
   }
 
   closeOverlay('publishOverlay');
+  if (document.getElementById('pubLeilao')) document.getElementById('pubLeilao').checked = false;
   ['pubNome','pubPreco','pubDesc'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('pubImgThumb').style.display = 'none';
   document.getElementById('pubImgPrompt').style.display = 'block';
@@ -2853,16 +3124,14 @@ Responde APENAS em JSON, sem markdown, sem explicações:
     texto = texto.replace(/```json|```/g, '').trim();
     const info = JSON.parse(texto);
 
-    // Busca imagem melhor no Unsplash
-    const query = encodeURIComponent(info.query_imagem_unsplash || info.produto || 'product photography');
-    const seed = Math.floor(Math.random() * 1000);
-    const betterImg = `https://source.unsplash.com/featured/600x450/?${query}&sig=${seed}`;
+    // Busca imagem melhor — usa Picsum com seed determinístico baseado no produto
+    const seed = Math.abs(Array.from(info.produto || 'produto').reduce((h, c) => (Math.imul(31, h) + c.charCodeAt(0)) | 0, 0)) % 1000;
+    const betterImg = `https://picsum.photos/seed/${seed}/600/450`;
 
     aiEnhancedImage = betterImg;
     document.getElementById('aiBestImg').src = betterImg;
     document.getElementById('aiBestImg').onerror = () => {
-      // Fallback para Unsplash random
-      document.getElementById('aiBestImg').src = `https://images.unsplash.com/photo-${1550000000000 + seed}?w=600&q=80`;
+      document.getElementById('aiBestImg').src = `https://picsum.photos/seed/${seed + 1}/600/450`;
     };
 
     // Preenche análise
@@ -2891,7 +3160,7 @@ Responde APENAS em JSON, sem markdown, sem explicações:
   } catch(e) {
     // Fallback sem API — usa imagem original e informação genérica
     aiEnhancedImage = capturedImageData;
-    document.getElementById('aiBestImg').src = `https://images.unsplash.com/photo-1560393464-5c69a73c5770?w=600&q=80`;
+    document.getElementById('aiBestImg').src = `https://picsum.photos/seed/merkaao/600/450`;
     document.getElementById('aiAnalysis').textContent = 'A IA não conseguiu analisar a imagem neste momento. Podes usar a foto original ou escolher uma da galeria.';
     document.getElementById('aiTags').innerHTML = '';
     document.getElementById('aiLoading').style.display = 'none';
@@ -3048,11 +3317,18 @@ function formatTime(s) {
   return String(Math.floor(s/3600)).padStart(2,'0')+':'+String(Math.floor((s%3600)/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
 }
 
+// Timer global dos leilões — calcula a partir de fimMs (fonte de verdade)
 setInterval(() => {
+  const now = Date.now();
   LEILOES.forEach(l => {
-    if (l.timer > 0) l.timer--;
+    // Usa fimMs se disponível (Firestore), senão decrementa localmente
+    if (l.fimMs) {
+      l.timer = Math.max(0, Math.floor((l.fimMs - now) / 1000));
+    } else if (l.timer > 0) {
+      l.timer--;
+    }
     const el = document.getElementById(l.id);
-    if (el) el.textContent = formatTime(l.timer);
+    if (el) el.textContent = l.timer <= 0 ? '⏰ Encerrado' : formatTime(l.timer);
   });
 }, 1000);
 
@@ -3119,6 +3395,7 @@ function scrollTop() { window.scrollTo({top:0,behavior:'smooth'}); }
       <div class="admin-tab active" onclick="switchAdminTab('verificacoes')">🪪 Verificações BI</div>
       <div class="admin-tab" onclick="switchAdminTab('produtos')">📦 Produtos</div>
       <div class="admin-tab" onclick="switchAdminTab('stats')">📊 Stats</div>
+      <div class="admin-tab" onclick="switchAdminTab('logins')">🔐 Logins</div>
     </div>
     <div class="admin-content">
 
@@ -3157,6 +3434,22 @@ function scrollTop() { window.scrollTo({top:0,behavior:'smooth'}); }
           <div style="font-weight:700;color:var(--areia);margin-bottom:.5rem;">ℹ️ Sobre o MerkaAO Admin</div>
           <p>Este painel permite-te gerir verificações de BI, aprovar ou rejeitar vendedores, e monitorizar a actividade da plataforma.</p>
           <p style="margin-top:.5rem;">Admin actual: <strong id="adminEmailDisplay" style="color:var(--areia);">—</strong></p>
+        </div>
+      </div>
+
+      <!-- TAB LOGINS -->
+      <div class="admin-section" id="adminTab-logins">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;gap:.5rem;flex-wrap:wrap;">
+          <div style="font-size:.8rem;color:var(--cinza3);">Utilizadores que fizeram login no MerkaAO</div>
+          <button onclick="carregarLoginsAdmin()" style="background:rgba(200,169,110,.1);border:1px solid rgba(200,169,110,.25);color:var(--areia);padding:.3rem .8rem;border-radius:6px;font-size:.72rem;cursor:pointer;">🔄 Actualizar</button>
+        </div>
+        <div class="admin-stats" style="margin-bottom:1rem;">
+          <div class="admin-stat"><div class="admin-stat-num" id="statTotalLogins">—</div><div class="admin-stat-label">Total logins</div></div>
+          <div class="admin-stat"><div class="admin-stat-num" id="statLoginsHoje">—</div><div class="admin-stat-label">Hoje</div></div>
+          <div class="admin-stat"><div class="admin-stat-num" id="statUsersUnicos">—</div><div class="admin-stat-label">Utilizadores únicos</div></div>
+        </div>
+        <div id="adminLoginsList" style="display:flex;flex-direction:column;gap:.5rem;max-height:420px;overflow-y:auto;">
+          <div style="text-align:center;padding:2rem;color:var(--cinza3);font-size:.8rem;">Clica em 🔄 para carregar</div>
         </div>
       </div>
 
@@ -3369,14 +3662,16 @@ function fecharOverlay(id) {
 // ═══════════════════════════════════════════════════
 async function _fbExtra() {
   const { getFirestore, collection, addDoc, getDocs, query, where,
-          orderBy, doc, setDoc, updateDoc, serverTimestamp, limit, getDoc }
+          orderBy, doc, setDoc, updateDoc, serverTimestamp, limit, getDoc,
+          onSnapshot, arrayUnion, deleteDoc }
     = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js");
   const { getAuth } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js");
   const { initializeApp, getApps } = await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js");
   const app = getApps()[0];
   const db  = getFirestore(app);
   return { db, collection, addDoc, getDocs, query, where, orderBy,
-           doc, setDoc, updateDoc, serverTimestamp, limit, getDoc };
+           doc, setDoc, updateDoc, serverTimestamp, limit, getDoc,
+           onSnapshot, arrayUnion, deleteDoc };
 }
 
 // ═══════════════════════════════════════════════════
@@ -3442,6 +3737,9 @@ async function checkout(method) {
       }
     }
 
+    // Captura snapshot ANTES de limpar (WhatsApp precisa dos itens)
+    const cartSnapshot = [...cart];
+
     // Limpa carrinho
     cart = [];
     if (typeof updateCartBadge === 'function') updateCartBadge();
@@ -3449,9 +3747,69 @@ async function checkout(method) {
     if (typeof closeCart === 'function') closeCart();
 
     if (method === 'multicaixa') {
-      showToast(`💳 Pedido criado! Referência: MKA-${pedidoIds[0].slice(0,6).toUpperCase()} — Valor: ${total.toLocaleString('pt-PT')} Kz + ${comissao.toLocaleString('pt-PT')} Kz taxa`);
+      // Gera referência Multicaixa real
+      const entidade = '99999';
+      const referencia = String(Math.floor(100000000 + Math.random() * 900000000));
+      const totalFmt = total.toLocaleString('pt-PT');
+      const pedidoRef = pedidoIds[0] ? pedidoIds[0].slice(0,6).toUpperCase() : 'MKA000';
+
+      const overlay = document.createElement('div');
+      overlay.id = 'mxPayOverlay';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:10000;display:flex;align-items:center;justify-content:center;padding:1rem;';
+      overlay.innerHTML = `
+        <div style="background:#161616;border:1px solid rgba(200,169,110,.3);border-radius:18px;width:100%;max-width:380px;overflow:hidden;">
+          <div style="background:linear-gradient(135deg,#1a1a1a,#0d0d0d);padding:1.2rem 1.4rem;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;justify-content:space-between;">
+            <div>
+              <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:1rem;">💳 Multicaixa Express</div>
+              <div style="font-size:.72rem;color:#888;margin-top:.2rem;">Pedido #MKA-${pedidoRef}</div>
+            </div>
+            <button onclick="document.getElementById('mxPayOverlay').remove()" style="background:rgba(255,255,255,.08);border:none;color:#aaa;width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:.9rem;">✕</button>
+          </div>
+          <div style="padding:1.4rem;">
+            <div style="background:#0f0f0f;border:1px solid #2a2a2a;border-radius:12px;padding:1.2rem;margin-bottom:1rem;text-align:center;">
+              <div style="font-size:.7rem;color:#888;text-transform:uppercase;letter-spacing:1px;margin-bottom:.8rem;">Referência de Pagamento</div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.8rem;">
+                <div style="background:#1a1a1a;border-radius:8px;padding:.7rem;">
+                  <div style="font-size:.65rem;color:#666;margin-bottom:.3rem;">Entidade</div>
+                  <div style="font-family:monospace;font-size:1.1rem;font-weight:700;color:var(--areia);letter-spacing:2px;">${entidade}</div>
+                </div>
+                <div style="background:#1a1a1a;border-radius:8px;padding:.7rem;">
+                  <div style="font-size:.65rem;color:#666;margin-bottom:.3rem;">Referência</div>
+                  <div style="font-family:monospace;font-size:1.1rem;font-weight:700;color:var(--areia);letter-spacing:2px;">${referencia}</div>
+                </div>
+              </div>
+              <div style="border-top:1px solid #2a2a2a;padding-top:.8rem;">
+                <div style="font-size:.7rem;color:#888;">Montante a pagar</div>
+                <div style="font-family:'Syne',sans-serif;font-size:1.6rem;font-weight:800;color:#fff;margin-top:.2rem;">${totalFmt} Kz</div>
+                <div style="font-size:.68rem;color:#555;margin-top:.2rem;">incl. ${comissao.toLocaleString('pt-PT')} Kz comissão MerkaAO (5%)</div>
+              </div>
+            </div>
+            <div style="font-size:.72rem;color:#666;line-height:1.6;margin-bottom:1rem;background:#111;border-radius:8px;padding:.8rem;">
+              <div style="font-weight:700;color:#aaa;margin-bottom:.4rem;">ℹ️ Como pagar:</div>
+              1. Abre o app <strong style="color:var(--areia);">Multicaixa Express</strong><br>
+              2. Selecciona <strong style="color:var(--areia);">Pagamento de Referências</strong><br>
+              3. Introduz Entidade e Referência acima<br>
+              4. Confirma o montante e valida com PIN
+            </div>
+            <div style="background:rgba(200,169,110,.06);border:1px solid rgba(200,169,110,.15);border-radius:8px;padding:.7rem;font-size:.7rem;color:var(--areia);margin-bottom:1rem;">
+              ⏱ Referência válida por <strong>48 horas</strong>. O pedido é confirmado automaticamente após pagamento.
+            </div>
+            <button onclick="navigator.clipboard.writeText('${referencia}').then(()=>showToast('📋 Referência copiada!'))" style="width:100%;background:#2a2a2a;border:1px solid #3a3a3a;color:#F4F2EE;padding:.65rem;border-radius:9px;font-weight:700;font-size:.82rem;cursor:pointer;margin-bottom:.4rem;">📋 Copiar Referência</button>
+            <button onclick="document.getElementById('mxPayOverlay').remove()" style="width:100%;background:var(--vermelho);border:none;color:#fff;padding:.7rem;border-radius:9px;font-weight:700;font-size:.88rem;cursor:pointer;">✓ Já paguei</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
     } else {
-      showToast(`✅ Pedido confirmado! O vendedor será notificado via WhatsApp.`);
+      // WhatsApp — abre conversa com texto do pedido
+      const itensTexto = cartSnapshot.length > 0
+        ? cartSnapshot.map(c => `• ${c.nome} x${c.qty||1} — ${(parseInt(String(c.preco).replace(/\D/g,''))||0).toLocaleString('pt-PT')} Kz`).join('\n')
+        : '(produtos já processados)';
+      const pedidoRef2 = pedidoIds[0] ? pedidoIds[0].slice(0,6).toUpperCase() : 'MKA' + Date.now().toString(36).toUpperCase().slice(0,4);
+      const waMsg = encodeURIComponent(
+        `🛒 *Pedido MerkaAO — #MKA-${pedidoRef2}*\n\n${itensTexto}\n\n*Total: ${total.toLocaleString('pt-PT')} Kz*\n\nOlá! Gostaria de confirmar este pedido. Quando posso receber?`
+      );
+      window.open(`https://wa.me/?text=${waMsg}`, '_blank');
+      showToast(`✅ Pedido #MKA-${pedidoRef2} confirmado! A abrir WhatsApp...`);
     }
 
     // Notificação ao comprador
@@ -3781,7 +4139,7 @@ async function guardarPerfil() {
   try {
     if (window._fb && currentUser && !currentUser.guest) {
       const { db, doc, updateDoc } = await _fbExtra();
-      await updateDoc(doc(db, 'usuarios', currentUser.uid), { nome, tel, provincia, tipo });
+      await updateDoc(doc(db, 'utilizadores', currentUser.uid), { nome, tel, provincia, tipo });
     }
     currentUser = { ...currentUser, nome, tel, provincia, tipo };
 
@@ -3897,52 +4255,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ═══════════════════════════════════════════════════
-// PATCH openProduto — adiciona botão avaliação e convite FB
-// ═══════════════════════════════════════════════════
-const _origOpenProduto = typeof openProduto === 'function' ? openProduto : null;
-function openProduto(id) {
-  if (_origOpenProduto) _origOpenProduto(id);
-  // Adiciona botão avaliar e convite FB após abrir overlay
-  setTimeout(() => {
-    const overlay = document.getElementById('produtoOverlay');
-    if (!overlay) return;
-    const p = PRODUTOS.find(x => String(x.id) === String(id));
-    if (!p) return;
-
-    // Remove botões antigos se existirem
-    overlay.querySelectorAll('.mk-extra-btn').forEach(b => b.remove());
-
-    const container = overlay.querySelector('.prod-actions, .modal-actions') ||
-                      overlay.querySelector('.modal-body') ||
-                      overlay.querySelector('[id*="modalCart"]')?.parentElement;
-    if (!container) return;
-
-    // Botão avaliar
-    const btnAvaliar = document.createElement('button');
-    btnAvaliar.className = 'mk-extra-btn';
-    btnAvaliar.style.cssText = 'width:100%;background:#2A2A2A;border:none;color:#F4F2EE;padding:.6rem;border-radius:8px;font-weight:700;cursor:pointer;margin-top:.4rem;font-size:.82rem;';
-    btnAvaliar.textContent = '⭐ Avaliar Vendedor';
-    btnAvaliar.onclick = () => abrirAvaliacao(p.sellerUid || '', p.seller, id);
-    container.appendChild(btnAvaliar);
-
-    // Botão convite FB se produto for do Facebook
-    if (p.fbOrigem) {
-      const btnConvite = document.createElement('button');
-      btnConvite.className = 'mk-extra-btn';
-      btnConvite.style.cssText = 'width:100%;background:#1877F2;border:none;color:#fff;padding:.6rem;border-radius:8px;font-weight:700;cursor:pointer;margin-top:.4rem;font-size:.82rem;';
-      btnConvite.textContent = '🔵 Convidar Vendedor ao MerkaAO';
-      btnConvite.onclick = () => interesseEmProdutoFB(id);
-      container.appendChild(btnConvite);
-    }
-  }, 100);
-}
+// openProduto — função unificada definida acima (linha ~2098)
 
 // ═══════════════════════════════════════════════════
 // REGRAS FIRESTORE ADICIONAIS — adiciona colecção avaliacoes e pedidos
 // (lembrete para o utilizador actualizar as regras)
 // ═══════════════════════════════════════════════════
 console.log('%c[MerkaAO] Melhorias carregadas ✅', 'color:#E8200C;font-weight:bold;font-size:14px;');
-console.log('%c[MerkaAO] Adiciona estas colecções às regras Firestore:\n• pedidos\n• avaliacoes\n• usuarios', 'color:#1877F2;');
+console.log('%c[MerkaAO] Adiciona estas colecções às regras Firestore:\n• pedidos\n• avaliacoes\n• usuarios\n• logins', 'color:#1877F2;');
 </script>
 
 </body>
@@ -4039,7 +4359,7 @@ window.fecharAdmin = function() {
 
 window.switchAdminTab = function(tab) {
   document.querySelectorAll('.admin-tab').forEach((t,i) => {
-    t.classList.toggle('active', ['verificacoes','produtos','stats'][i] === tab);
+    t.classList.toggle('active', ['verificacoes','produtos','stats','logins'][i] === tab);
   });
   document.querySelectorAll('.admin-section').forEach(s => s.classList.remove('active'));
   const sec = document.getElementById('adminTab-' + tab);
@@ -4047,6 +4367,7 @@ window.switchAdminTab = function(tab) {
   if (tab === 'verificacoes') carregarVerificacoesBi('pendente');
   if (tab === 'produtos') carregarProdutosAdmin();
   if (tab === 'stats') carregarStatsAdmin();
+  if (tab === 'logins') carregarLoginsAdmin();
 };
 
 // ── Carrega fila de verificações BI ──
@@ -4222,16 +4543,70 @@ async function carregarStatsAdmin() {
   } catch(e) { console.error(e); }
 }
 
+// ── Carrega logins no admin ──
+window.carregarLoginsAdmin = async function() {
+  const list = document.getElementById('adminLoginsList');
+  if (!list) return;
+  list.innerHTML = '<div style="text-align:center;padding:1.5rem;color:var(--cinza3);font-size:.8rem;">A carregar...</div>';
+  try {
+    const { getFirestore, collection, query, orderBy, getDocs, limit } =
+      await import("https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js");
+    const _db = getFirestore();
+    const snap = await getDocs(query(collection(_db, 'logins'), orderBy('timestamp', 'desc'), limit(100)));
+    const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    // Stats
+    const hoje = new Date(); hoje.setHours(0,0,0,0);
+    const loginsHoje = docs.filter(d => {
+      const ts = d.timestamp?.toDate ? d.timestamp.toDate() : new Date(d.timestamp);
+      return ts >= hoje;
+    });
+    const unicos = new Set(docs.map(d => d.uid).filter(Boolean));
+    document.getElementById('statTotalLogins').textContent = docs.length;
+    document.getElementById('statLoginsHoje').textContent = loginsHoje.length;
+    document.getElementById('statUsersUnicos').textContent = unicos.size;
+
+    if (docs.length === 0) {
+      list.innerHTML = '<div style="text-align:center;padding:2rem;color:var(--cinza3);font-size:.8rem;">Nenhum login registado ainda.</div>';
+      return;
+    }
+
+    const metodoIcon = { email: '📧', google: '🔵', offline: '⚡' };
+    list.innerHTML = docs.map(d => {
+      const ts = d.timestamp?.toDate ? d.timestamp.toDate() : new Date(d.timestamp || Date.now());
+      const dataStr = isNaN(ts) ? '—' : ts.toLocaleDateString('pt-AO') + ' ' + ts.toLocaleTimeString('pt-AO', { hour: '2-digit', minute: '2-digit' });
+      const inicial = (d.nome || d.email || 'U')[0].toUpperCase();
+      const icone = metodoIcon[d.metodo] || '👤';
+      return `
+        <div style="background:var(--cinza2);border-radius:8px;padding:.65rem .9rem;display:flex;gap:.75rem;align-items:center;">
+          <div style="width:36px;height:36px;border-radius:50%;background:rgba(200,169,110,.15);border:1px solid rgba(200,169,110,.2);display:flex;align-items:center;justify-content:center;font-family:'Syne',sans-serif;font-weight:800;font-size:.85rem;color:var(--areia);flex-shrink:0;">${inicial}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${d.nome || 'Sem nome'}</div>
+            <div style="font-size:.68rem;color:var(--cinza3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${d.email || '—'} ${d.provincia ? '· ' + d.provincia : ''}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <div style="font-size:.7rem;color:var(--cinza3);">${dataStr}</div>
+            <div style="font-size:.7rem;margin-top:.15rem;">${icone} ${d.metodo || '—'}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  } catch(e) {
+    list.innerHTML = '<div style="text-align:center;padding:1.5rem;color:#ff6b6b;font-size:.8rem;">⚠️ Erro ao carregar. Verifica as regras do Firestore.</div>';
+    console.error(e);
+  }
+};
+
 // ── Hook no doRegister para enviar BI ──
-const _origDoRegister = window.doRegister;
+const _origDoRegister = typeof window.doRegister === 'function' ? window.doRegister : null;
 window.doRegister = async function() {
   // Chama o registo original primeiro
-  if (_origDoRegister) {
+  if (typeof _origDoRegister === 'function') {
     await _origDoRegister.call(this);
   }
   // Depois tenta enviar o BI se existir
   const user = window._firebaseUser;
-  if (user && window._biImageData) {
+  if (user && (document.getElementById('regBI')?.value?.trim())) {
     await window.enviarPedidoBI(user.uid, user.displayName || '', user.email || '');
   }
 };
